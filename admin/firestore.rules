@@ -2,25 +2,100 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    /* The dashboard uses Firebase Authentication, but these rules still allow
-       unauthenticated public access for the public account-request and QR
-       borrowing pages. They do not restrict dashboard data to administrators
-       and must be tightened before using real school data. */
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function hasActiveAccount() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/accounts/$(request.auth.uid))
+        && get(/databases/$(database)/documents/accounts/$(request.auth.uid)).data.status == 'active';
+    }
+
+    function hasCompletedAccount() {
+      return hasActiveAccount()
+        && get(/databases/$(database)/documents/accounts/$(request.auth.uid)).data.get('mustChangePassword', false) != true;
+    }
 
     match /equipment/{itemId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAdmin();
     }
     match /loans/{loanId} {
-      allow read, write: if true;
+      allow read: if isAdmin() || hasCompletedAccount();
+      allow create: if isAdmin()
+        || (hasCompletedAccount()
+          && request.resource.data.status == 'pending'
+          && request.resource.data.keys().hasOnly([
+            'id', 'equipmentId', 'name', 'borrower', 'start', 'end',
+            'status', 'returnedOn', 'updatedAt'
+          ]));
+      allow update, delete: if isAdmin();
     }
     match /meta/{docId} {
-      allow read, write: if true;
+      allow read, write: if isAdmin();
     }
     match /accountRequests/{requestId} {
-      allow read, write: if true;
+      allow create: if request.resource.data.keys().hasOnly([
+            'id', 'authUid', 'name', 'email', 'role', 'idNumber',
+            'status', 'submittedAt', 'updatedAt'
+        ])
+        && signedIn()
+        && request.resource.data.id == requestId
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.authUid is string
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 3
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.idNumber is string
+        && request.resource.data.role in ['student', 'faculty']
+        && request.resource.data.status == 'pending'
+        && request.resource.data.submittedAt is int
+        && request.resource.data.updatedAt is int;
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.authUid == request.auth.uid);
+      allow update: if isAdmin()
+        || (signedIn()
+          && resource.data.authUid == request.auth.uid
+          && resource.data.status == 'approved'
+          && resource.data.keys().hasAny(['temporaryPassword'])
+          && !request.resource.data.keys().hasAny(['temporaryPassword'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'temporaryPassword'
+          ]));
+      allow delete: if isAdmin();
     }
     match /accounts/{accountId} {
-      allow read, write: if true;
+      allow read: if isAdmin()
+        || (hasActiveAccount() && request.auth.uid == accountId);
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+        || (hasActiveAccount()
+          && request.auth.uid == accountId
+          && request.resource.data.email == request.auth.token.email
+          && (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'name', 'email', 'gender', 'college', 'course', 'yearLevel',
+              'block', 'profileUpdatedAt'
+            ])
+            || (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'mustChangePassword'
+            ])
+              && resource.data.mustChangePassword == true
+              && request.resource.data.mustChangePassword == false)
+          ));
+    }
+    match /admins/{adminId} {
+      allow read: if signedIn() && request.auth.uid == adminId;
+      allow write: if false;
     }
   }
 }

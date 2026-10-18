@@ -5,10 +5,13 @@
 // Enable Email/Password sign-in in Firebase Authentication and create admin
 // accounts there; the dashboard does not contain a built-in account.
 window.LENDY_FIREBASE_CONFIG = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyAcz3gdaWdrEd3aajqX9I9p36bkJ2ahN14",
+  authDomain: "borrowing-system-lendy.firebaseapp.com",
+  projectId: "borrowing-system-lendy",
+  storageBucket: "borrowing-system-lendy.firebasestorage.app",
+  messagingSenderId: "325712193434",
+  appId: "1:325712193434:web:589e74cf477099b6b97c23"
 };
+
+// Set this to the deployed approval-server URL from FIREBASE_SETUP.md.
+window.LENDY_APPROVAL_API_URL = "";

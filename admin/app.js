@@ -255,7 +255,7 @@
   var state = {
     view: 'dashboard', lastView: null, chartMode: 'day', sidebarOpen: false, assistantOpen: false, modal: null,
     filter: { inventory: 'all', history: 'all', usersRole: 'all', usersCourse: 'all' }, q: { inventory: '', history: '', users: '' },
-    tab: { requests: 'pending' }, lastApproval: null,
+    tab: { requests: 'pending' },
     chat: [{ from: 'bot', text: "Hi, I'm the Lendy assistant. Ask me what's going on with the equipment." }]
   };
   var pendingConfirm = null;
@@ -501,7 +501,8 @@
         return '<div class="grid ' + C + ' gap-3 px-4 py-3.5 items-center text-[13px] border-t border-line">' +
           '<span class="truncate font-medium">' + esc(r.name) + '</span>' +
           '<span>' + rolePill(r.role) + '</span>' +
-          '<span class="truncate text-muted">' + esc(r.email) + '</span>' +
+          '<span class="truncate text-muted">' + esc(r.email) +
+          (r.idNumber ? '<span class="block text-[11px]">ID: ' + esc(r.idNumber) + '</span>' : '') + '</span>' +
           '<span class="text-muted">' + esc(fmtWhen(r.submittedAt)) + '</span>' +
           '<div class="flex justify-end gap-2">' +
           '<button class="btn btn-primary btn-sm" data-action="approve-request" data-id="' + r.id + '">' + icon('check', 'w-3.5 h-3.5') + 'Approve</button>' +
@@ -594,13 +595,6 @@
   function viewRequests() {
     var tab = state.tab.requests;
     var pendingCount = pendingRequests().length, accountsCount = db.accounts.length;
-    var banner = '';
-    if (state.lastApproval) {
-      banner = '<div class="mb-5 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-white" style="background:var(--btn-bg)">' +
-        '<p class="text-sm">Access approved for <b>' + esc(state.lastApproval.name) + '</b> \u2014 code ' +
-        '<span class="pill" style="background:rgba(255,255,255,.18);color:#fff;border-color:rgba(255,255,255,.4)">' + esc(state.lastApproval.code) + '</span></p>' +
-        '<button class="text-white/80 hover:text-white" data-action="dismiss-approval" aria-label="Dismiss">' + icon('x', 'w-4 h-4') + '</button></div>';
-    }
     var tabBtn = function (key, label, count) {
       var on = tab === key;
       return '<button data-action="requests-tab" data-tab="' + key + '" aria-pressed="' + on + '" class="px-4 py-2 rounded-xl text-sm font-semibold ' +
@@ -609,7 +603,7 @@
     return pageHeader('Requests & accounts', 'Review access requests and manage who can sign in.') +
       '<div class="mt-8 inline-flex gap-1 p-1 rounded-2xl" style="background:var(--bar-track)">' +
       tabBtn('pending', 'Pending', pendingCount) + tabBtn('accounts', 'Accounts', accountsCount) + '</div>' +
-      '<div class="mt-5">' + banner + (tab === 'accounts' ? accountsTab() : pendingTab()) + '</div>';
+      '<div class="mt-5">' + (tab === 'accounts' ? accountsTab() : pendingTab()) + '</div>';
   }
 
 
@@ -820,17 +814,55 @@
       .then(function () { toast('Rejected the request from ' + l.borrower + '.'); })
       .catch(fail('Could not reject the request'));
   }
-  function genCode() { return String(Math.floor(100000 + Math.random() * 900000)); }
   function approveRequest(id) {
     var r = db.accountRequests.find(function (x) { return x.id === id; });
     if (!r || r.status !== 'pending') return;
-    var code = genCode();
-    var batch = fsdb.batch();
-    batch.update(requestsCol.doc(id), { status: 'approved', updatedAt: Date.now() });
-    batch.set(accountsCol.doc(id), { id: id, name: r.name, email: r.email, role: r.role || 'student', course: r.course || '', code: code, status: 'active', createdAt: Date.now() });
-    batch.commit()
-      .then(function () { state.lastApproval = { name: r.name, code: code }; render(); })
-      .catch(fail('Could not approve the request'));
+    openModal({ type: 'approve-account', id: id });
+  }
+  function submitApproveRequest(form) {
+    var requestId = form.dataset.requestId;
+    var r = db.accountRequests.find(function (x) { return x.id === requestId; });
+    if (!r || r.status !== 'pending') {
+      return formError('This account request is no longer awaiting approval.');
+    }
+    if (!r.authUid) return formError('This request was created before the free-plan account flow. Ask the user to submit a new request.');
+    var password = String(new FormData(form).get('temporaryPassword') || '');
+    if (password.length < 8 || password.length > 128) {
+      return formError('Temporary password must be between 8 and 128 characters.');
+    }
+    var submitButton = form.querySelector('button[type=submit]');
+    if (submitButton) submitButton.disabled = true;
+    var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
+    if (!endpoint) {
+      if (submitButton) submitButton.disabled = false;
+      return formError('The account approval service URL is not configured. Follow FIREBASE_SETUP.md.');
+    }
+    auth.currentUser.getIdToken()
+      .then(function (idToken) {
+        return fetch(endpoint + '/approve-account', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + idToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ requestId: requestId, temporaryPassword: password })
+        });
+      })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body.error || 'Approval service returned HTTP ' + response.status + '.');
+          return body;
+        });
+      })
+      .then(function () {
+        closeModal();
+        render();
+        toast('Approved the account. The temporary password is now available in the user’s app.');
+      })
+      .catch(function (err) {
+        if (submitButton) submitButton.disabled = false;
+        formError('Could not finish approval: ' + err.message);
+      });
   }
   function rejectRequest(id) {
     var r = db.accountRequests.find(function (x) { return x.id === id; });
@@ -927,6 +959,24 @@
     return modalHead(esc(m.title)) + '<p class="text-sm text-muted mt-3">' + esc(m.body) + '</p>' +
       '<div class="mt-6 flex justify-end gap-2"><button class="btn btn-ghost" data-action="close-modal">Cancel</button>' +
       '<button class="btn ' + (m.danger ? 'btn-danger' : 'btn-primary') + '" data-action="confirm-yes">' + esc(m.label) + '</button></div>';
+  }
+  function approveAccountForm(m) {
+    var request = db.accountRequests.find(function (x) { return x.id === m.id; });
+    if (!request || request.status !== 'pending') {
+      return modalHead('Request unavailable') +
+        '<p class="text-sm text-muted mt-3">This account request is no longer awaiting approval.</p>' +
+        '<div class="mt-6 flex justify-end"><button class="btn btn-ghost" data-action="close-modal">Close</button></div>';
+    }
+    return modalHead('Approve account',
+      'Set a temporary password for ' + esc(request.name) + '.') +
+      '<p class="text-sm text-muted mt-3">After approval, the user will see the temporary password in the mobile app and must change it after signing in.</p>' +
+      '<form data-form="approve-account" data-request-id="' + esc(request.id) + '" novalidate class="mt-5 grid gap-4">' +
+      '<div><label class="lbl" for="approval-password">Temporary password</label>' +
+      '<input id="approval-password" name="temporaryPassword" type="text" class="field" minlength="8" maxlength="128" autocomplete="off" required>' +
+      '<p class="text-[11px] text-muted mt-1">Use 8 to 128 characters. The user must change it at first login.</p></div>' +
+      '<p id="form-error" class="text-sm t-bad min-h-[1.25rem]" role="alert"></p>' +
+      '<div class="flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button>' +
+      '<button type="submit" class="btn btn-primary">Approve and show password</button></div></form>';
   }
   function itemUrl(id) {
     // item.html lives next to index.html, so this works wherever the app is hosted.
@@ -1206,7 +1256,6 @@
       case 'approve-request': approveRequest(id); break;
       case 'reject-request': rejectRequest(id); break;
       case 'requests-tab': state.tab.requests = el.dataset.tab; render(); break;
-      case 'dismiss-approval': state.lastApproval = null; render(); break;
       case 'open-account': openModal({ type: 'account', id: id }); break;
       case 'users-role': state.filter.usersRole = el.dataset.value; render(); break;
       case 'open-user': openModal({ type: 'user-detail', id: id }); break;
@@ -1287,6 +1336,7 @@
     var form = ev.target;
     if (form.dataset.form === 'request') submitRequest(form);
     else if (form.dataset.form === 'add') submitAdd(form);
+    else if (form.dataset.form === 'approve-account') submitApproveRequest(form);
     else if (form.dataset.form === 'edit-profile') submitEditProfile(form);
     else if (form.id === 'assistant-form') submitAssistant(form);
   });
