@@ -43,7 +43,7 @@ service cloud.firestore {
     }
     match /accountRequests/{requestId} {
       allow create: if request.resource.data.keys().hasOnly([
-            'id', 'authUid', 'name', 'email', 'role', 'idNumber',
+            'id', 'authUid', 'name', 'email', 'role', 'idNumber', 'college',
             'status', 'submittedAt', 'updatedAt'
         ])
         && signedIn()
@@ -56,6 +56,7 @@ service cloud.firestore {
         && request.resource.data.email.size() > 3
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.idNumber is string
+        && request.resource.data.college is string
         && request.resource.data.role in ['student', 'faculty']
         && request.resource.data.status == 'pending'
         && request.resource.data.submittedAt is int

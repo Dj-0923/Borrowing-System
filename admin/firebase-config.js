@@ -14,4 +14,4 @@ window.LENDY_FIREBASE_CONFIG = {
 };
 
 // Set this to the deployed approval-server URL from FIREBASE_SETUP.md.
-window.LENDY_APPROVAL_API_URL = "";
+window.LENDY_APPROVAL_API_URL = "https://lendy-account-approval.onrender.com";

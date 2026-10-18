@@ -499,7 +499,8 @@
       '<div class="grid ' + C + ' gap-3 px-4 py-3 bg-head text-[13px] font-bold"><span>Name</span><span>Role</span><span>Email</span><span>Requested</span><span class="text-right">Action</span></div>' +
       list.map(function (r) {
         return '<div class="grid ' + C + ' gap-3 px-4 py-3.5 items-center text-[13px] border-t border-line">' +
-          '<span class="truncate font-medium">' + esc(r.name) + '</span>' +
+          '<span class="truncate font-medium">' + esc(r.name) +
+          (r.college ? '<span class="block text-[11px] text-muted">' + esc(r.college) + '</span>' : '') + '</span>' +
           '<span>' + rolePill(r.role) + '</span>' +
           '<span class="truncate text-muted">' + esc(r.email) +
           (r.idNumber ? '<span class="block text-[11px]">ID: ' + esc(r.idNumber) + '</span>' : '') + '</span>' +
