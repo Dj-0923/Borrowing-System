@@ -47,6 +47,14 @@
     if (!parts.length) return 'A';
     return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
   };
+  function userAvatar(account, sizeClass, textClass) {
+    var image = typeof account.profileImage === 'string' &&
+      /^data:image\/(?:jpeg|png|webp);base64,/i.test(account.profileImage);
+    return image
+      ? '<img src="' + esc(account.profileImage) + '" alt="" class="' + sizeClass + ' rounded-full object-cover shrink-0">'
+      : '<span class="' + sizeClass + ' rounded-full flex items-center justify-center text-white font-display font-bold ' + textClass + ' shrink-0" style="background:var(--btn-bg)">' +
+        esc(initials(account.name)) + '</span>';
+  }
 
   /* ---------- icons ---------- */
   var ICONS = {
@@ -560,15 +568,16 @@
           var disabled = a.status === 'revoked';
           return '<div class="grid ' + C + ' gap-3 px-4 py-3.5 items-center text-[13px] border-t border-line hover:bg-tint cursor-pointer" data-action="open-user" data-id="' + a.id + '">' +
             '<span class="flex items-center gap-3 min-w-0">' +
-            '<span class="w-9 h-9 rounded-full flex items-center justify-center font-display font-bold text-xs text-white shrink-0" style="background:var(--btn-bg)">' + esc(initials(a.name)) + '</span>' +
+            userAvatar(a, 'w-9 h-9', 'text-xs') +
             '<span class="min-w-0"><span class="block font-medium truncate">' + esc(a.name) + '</span><span class="block text-[11px] text-muted truncate">' + esc(a.email) + '</span></span></span>' +
             '<span>' + rolePill(a.role) + '</span>' +
             '<span class="truncate text-muted">' + esc(a.course || '\u2014') + '</span>' +
             '<span class="tnum">' + summary.itemsOut + '</span>' +
             '<span>' + pill(st) + '</span>' +
             '<span class="flex items-center justify-end gap-2" data-stop-row>' +
-            '<button class="btn btn-ghost btn-sm" disabled title="Needs real sign-in accounts to be meaningful \u2014 not set up yet">' + icon('key', 'w-3.5 h-3.5') + 'Reset password</button>' +
+            '<button class="btn btn-ghost btn-sm" data-action="reset-user-password" data-id="' + a.id + '">' + icon('key', 'w-3.5 h-3.5') + 'Reset password</button>' +
             '<button class="btn ' + (disabled ? 'btn-ghost' : 'btn-danger') + ' btn-sm" data-action="' + (disabled ? 'restore-account' : 'revoke-account') + '" data-id="' + a.id + '">' + (disabled ? 'Enable account' : 'Disable account') + '</button>' +
+            '<button class="btn btn-danger btn-sm" data-action="delete-user-account" data-id="' + a.id + '">' + icon('trash', 'w-3.5 h-3.5') + 'Delete</button>' +
             '</span></div>';
         }).join('') + '</div></div>';
     } else if (!accounts.length) {
@@ -879,12 +888,63 @@
       .then(function () { toast(statusValue === 'revoked' ? 'Revoked access for ' + a.name + '.' : 'Restored access for ' + a.name + '.'); })
       .catch(fail('Could not update the account'));
   }
-  function removeAccount(id) {
+  function requestAccountDeletion(id) {
     var a = db.accounts.find(function (x) { return x.id === id; });
     if (!a) return;
-    accountsCol.doc(id).delete()
-      .then(function () { toast('Removed ' + a.name + '\u2019s account.'); })
-      .catch(fail('Could not remove the account'));
+    pendingConfirm = function () { deleteUserAccount(id); };
+    openModal({
+      type: 'confirm',
+      title: 'Permanently delete ' + a.name + '\u2019s account?',
+      body: 'This deletes the sign-in account, profile, account requests, and linked borrowing records. Unlinked legacy loans are deleted only when this name belongs to one account; ambiguous records are kept to protect other users\u2019 history. This cannot be undone.',
+      label: 'Delete permanently',
+      danger: true
+    });
+  }
+  function deleteUserAccount(id) {
+    var a = db.accounts.find(function (x) { return x.id === id; });
+    if (!a) {
+      toast('Could not delete the account: it is no longer available.', 'bad');
+      return;
+    }
+    if (currentUser && currentUser.uid === id) {
+      toast('You cannot delete your own admin account.', 'bad');
+      return;
+    }
+    var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
+    if (!endpoint) {
+      toast('Could not delete the account: the account service URL is not configured.', 'bad');
+      return;
+    }
+    if (!auth.currentUser) {
+      toast('Could not delete the account: the admin session has expired. Sign in again.', 'bad');
+      return;
+    }
+    auth.currentUser.getIdToken()
+      .then(function (idToken) {
+        return fetch(endpoint + '/delete-account', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + idToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ accountId: id })
+        });
+      })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body.error || 'Account service returned HTTP ' + response.status + '.');
+          return body;
+        });
+      })
+      .then(function (result) {
+        closeModal();
+        if (result.ambiguousLegacyLoans) {
+          toast('Deleted ' + a.name + '\u2019s account. ' + result.ambiguousLegacyLoans + ' unlinked legacy loan(s) were kept because the borrower name is shared.');
+        } else {
+          toast('Deleted ' + a.name + '\u2019s account and ' + result.deletedLoans + ' loan record(s).');
+        }
+      })
+      .catch(fail('Could not delete the account'));
   }
   function markReturned(id) {
     var l = db.loans.find(function (x) { return x.id === id; });
@@ -1030,7 +1090,7 @@
       '<span class="text-xs text-muted">Access code</span><span class="font-display font-bold tracking-widest">' + esc(a.code) + '</span></div>' +
       '<div class="mt-6 flex flex-wrap justify-end gap-2">' +
       '<button class="btn btn-ghost" data-action="' + (revoked ? 'restore-account' : 'revoke-account') + '" data-id="' + a.id + '">' + (revoked ? 'Restore access' : 'Revoke access') + '</button>' +
-      '<button class="btn btn-danger" data-action="remove-account" data-id="' + a.id + '">Remove account</button></div>';
+      '<button class="btn btn-danger" data-action="delete-user-account" data-id="' + a.id + '">Delete account</button></div>';
   }
   function userDetailBody(m) {
     var a = db.accounts.find(function (x) { return x.id === m.id; });
@@ -1278,10 +1338,19 @@
       case 'open-user': openModal({ type: 'user-detail', id: id }); break;
       case 'revoke-account': setAccountStatus(id, 'revoked'); closeModal(); break;
       case 'restore-account': setAccountStatus(id, 'active'); closeModal(); break;
+      case 'reset-user-password':
+        var account = db.accounts.find(function (x) { return x.id === id; });
+        if (!account || !account.email) {
+          toast('Could not send the password reset email: account email is unavailable.', 'bad');
+          break;
+        }
+        auth.sendPasswordResetEmail(account.email)
+          .then(function () { toast('Password reset email sent to ' + account.email + '.'); })
+          .catch(fail('Could not send the password reset email'));
+        break;
+      case 'delete-user-account':
       case 'remove-account':
-        var acct = db.accounts.find(function (x) { return x.id === id; }); if (!acct) break;
-        pendingConfirm = function () { removeAccount(id); };
-        openModal({ type: 'confirm', title: 'Remove ' + acct.name + '\u2019s account?', body: 'They\u2019ll need a new approved request to get access again.', label: 'Remove account', danger: true });
+        requestAccountDeletion(id);
         break;
       case 'return': markReturned(id); break;
       case 'maintenance-on': setMaintenance(id, true); break;

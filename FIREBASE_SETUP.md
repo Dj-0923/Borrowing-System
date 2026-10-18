@@ -68,7 +68,9 @@ The repository includes a Render Blueprint in `render.yaml`.
    then publish the updated admin dashboard.
 
 The service account must be able to manage Firebase Authentication users and
-read/write Firestore. Grant only the permissions needed for those tasks.
+read/write Firestore. Grant only the permissions needed for those tasks. The
+service handles admin-approved account activation and confirmed full-account
+deletion, including linked loan and account-request records.
 
 ## What users and admins will see
 

@@ -104,6 +104,7 @@ async function requireAdmin(request) {
   if (!admin.exists || admin.data().role !== "admin") {
     throw new HttpError(403, "Admin access is required.");
   }
+  return decodedToken.uid;
 }
 
 async function approveRequest(data) {
@@ -234,6 +235,137 @@ async function approveRequest(data) {
   return { success: true };
 }
 
+async function deleteAccount(data, adminUid) {
+  const accountId = data && data.accountId;
+  if (
+    typeof accountId !== "string" ||
+    !/^[A-Za-z0-9_-]{1,128}$/.test(accountId)
+  ) {
+    throw new HttpError(400, "A valid account ID is required.");
+  }
+  if (accountId === adminUid) {
+    throw new HttpError(403, "You cannot delete your own admin account.");
+  }
+
+  const accountRef = db.collection("accounts").doc(accountId);
+  const accountSnapshot = await accountRef.get();
+  if (!accountSnapshot.exists) {
+    throw new HttpError(404, "The account could not be found.");
+  }
+  const account = accountSnapshot.data();
+  if (!["student", "faculty"].includes(account.role)) {
+    throw new HttpError(403, "Only student or faculty accounts can be deleted.");
+  }
+
+  let authAccountExists = true;
+  try {
+    await auth.getUser(accountId);
+  } catch (error) {
+    if (error.code === "auth/user-not-found") {
+      authAccountExists = false;
+    } else {
+      throw new HttpError(
+        502,
+        "Could not verify the user's Firebase Authentication account.",
+      );
+    }
+  }
+
+  const accountRequests = db.collection("accountRequests");
+  const linkedQueries = await Promise.all([
+    db.collection("loans").where("borrowerUid", "==", accountId).get(),
+    accountRequests.where("authUid", "==", accountId).get(),
+    accountRequests.where("accountId", "==", accountId).get(),
+  ]);
+
+  let unlinkedLegacyLoans = [];
+  let ambiguousLegacyLoans = 0;
+  const name = typeof account.name === "string" ? account.name.trim() : "";
+  if (name) {
+    const [sameNameAccounts, namedLoans] = await Promise.all([
+      db.collection("accounts").where("name", "==", name).get(),
+      db.collection("loans").where("borrower", "==", name).get(),
+    ]);
+    const legacyLoans = namedLoans.docs.filter(
+      (document) => !document.data().borrowerUid,
+    );
+    if (
+      sameNameAccounts.size === 1 &&
+      sameNameAccounts.docs[0].id === accountId
+    ) {
+      unlinkedLegacyLoans = legacyLoans;
+    } else {
+      ambiguousLegacyLoans = legacyLoans.length;
+    }
+  }
+
+  const loanReferences = new Map();
+  for (const document of [
+    ...linkedQueries[0].docs,
+    ...unlinkedLegacyLoans,
+  ]) {
+    loanReferences.set(document.ref.path, document.ref);
+  }
+  const requestReferences = new Map();
+  for (const document of [
+    ...linkedQueries[1].docs,
+    ...linkedQueries[2].docs,
+  ]) {
+    requestReferences.set(document.ref.path, document.ref);
+  }
+
+  async function deleteDocuments(references) {
+    const documents = [...references.values()];
+    for (let offset = 0; offset < documents.length; offset += 400) {
+      const batch = db.batch();
+      for (const reference of documents.slice(offset, offset + 400)) {
+        batch.delete(reference);
+      }
+      await batch.commit();
+    }
+    return documents.length;
+  }
+
+  const deletedLoans = await deleteDocuments(loanReferences);
+  const deletedRequests = await deleteDocuments(requestReferences);
+
+  if (authAccountExists) {
+    try {
+      await auth.deleteUser(accountId);
+    } catch (error) {
+      console.error("Could not delete the user's Firebase Authentication account.", {
+        accountId,
+        error: error.message,
+      });
+      throw new HttpError(
+        502,
+        "The linked records were deleted, but Firebase Authentication could not delete the sign-in account. Retry the delete action.",
+      );
+    }
+  }
+
+  try {
+    await accountRef.delete();
+  } catch (error) {
+    console.error("Could not delete the user account profile.", {
+      accountId,
+      error: error.message,
+    });
+    throw new HttpError(
+      500,
+      "The sign-in account and linked records were deleted, but the account profile could not be removed. Retry the delete action.",
+    );
+  }
+
+  return {
+    success: true,
+    deletedLoans,
+    deletedRequests: requestReferences.size,
+    authAccountDeleted: authAccountExists,
+    ambiguousLegacyLoans,
+  };
+}
+
 const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/health") {
     response.writeHead(200, {
@@ -262,15 +394,20 @@ const server = http.createServer(async (request, response) => {
     response.end();
     return;
   }
-  if (request.method !== "POST" || request.url !== "/approve-account") {
+  if (
+    request.method !== "POST" ||
+    !["/approve-account", "/delete-account"].includes(request.url)
+  ) {
     sendJson(response, 404, { error: "Endpoint not found." }, origin);
     return;
   }
 
   try {
-    await requireAdmin(request);
+    const adminUid = await requireAdmin(request);
     const data = await readJson(request);
-    const result = await approveRequest(data);
+    const result = request.url === "/approve-account"
+      ? await approveRequest(data)
+      : await deleteAccount(data, adminUid);
     sendJson(response, 200, result, origin);
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
