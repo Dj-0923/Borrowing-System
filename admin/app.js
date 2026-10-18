@@ -1043,11 +1043,27 @@
         '<span class="block font-display font-bold text-2xl leading-none ' + (bad ? 't-bad' : 'text-brand-deep') + '">' + n + '</span>' +
         '<span class="block mt-1.5 text-xs text-muted">' + label + '</span></div>';
     };
+    var detailRow = function (label, value) {
+      return '<div class="flex items-start justify-between gap-4 border-b border-line py-2.5 last:border-b-0">' +
+        '<span class="text-xs text-muted">' + label + '</span><span class="text-right text-sm font-medium break-words">' + esc(value || '\u2014') + '</span></div>';
+    };
+    var profile = a.profileImage
+      ? '<img src="' + esc(a.profileImage) + '" alt="' + esc(a.name) + ' profile photo" class="w-16 h-16 rounded-full object-cover border-2 border-white shadow">'
+      : '<span class="w-16 h-16 rounded-full flex items-center justify-center text-white font-display font-bold text-lg" style="background:var(--btn-bg)">' + esc(initials(a.name)) + '</span>';
+    var college = a.college || a.course;
     return '<div class="-m-6 mb-5 px-6 py-4 rounded-t-2xl text-white flex items-center gap-3" style="background:var(--btn-bg)">' +
       '<button data-action="close-modal" class="w-7 h-7 -ml-1 rounded-md flex items-center justify-center hover:bg-white/15" aria-label="Back">' + icon('chevronleft', 'w-5 h-5') + '</button>' +
       '<h2 class="font-display font-bold text-lg truncate">' + esc(a.name) + '</h2></div>' +
       '<div class="px-1">' +
-      '<p class="text-xs font-bold uppercase tracking-wide text-muted">Recent borrowings</p>' +
+      '<div class="flex items-center gap-4"><div class="shrink-0">' + profile + '</div><div class="min-w-0"><p class="font-semibold truncate">' + esc(a.name) + '</p><p class="text-xs text-muted break-all">' + esc(a.email || '\u2014') + '</p>' + rolePill(a.role) + '</div></div>' +
+      '<div class="mt-4 rounded-xl border border-line px-3">' +
+      detailRow('Gender', a.gender) +
+      detailRow('Email', a.email) +
+      detailRow(a.role === 'faculty' ? 'College / Department' : 'College', college) +
+      detailRow('Year level', a.yearLevel) +
+      detailRow('Block', a.block) +
+      '</div>' +
+      '<p class="text-xs font-bold uppercase tracking-wide text-muted mt-5">Recent borrowings</p>' +
       (recent.length
         ? '<div class="mt-2 rounded-xl border border-line divide-y divide-[color:var(--line)] overflow-hidden">' +
           recent.map(function (l) {

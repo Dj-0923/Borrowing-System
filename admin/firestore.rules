@@ -33,10 +33,44 @@ service cloud.firestore {
         || (hasCompletedAccount()
           && request.resource.data.status == 'pending'
           && request.resource.data.keys().hasOnly([
-            'id', 'equipmentId', 'name', 'borrower', 'start', 'end',
+            'id', 'borrowerUid', 'equipmentId', 'name', 'borrower', 'start', 'end',
             'status', 'returnedOn', 'updatedAt'
-          ]));
-      allow update, delete: if isAdmin();
+          ])
+          && request.resource.data.id == loanId
+          && request.resource.data.borrowerUid == request.auth.uid
+          && request.resource.data.equipmentId is string
+          && request.resource.data.name is string
+          && request.resource.data.borrower is string
+          && request.resource.data.start is string
+          && request.resource.data.end is string
+          && request.resource.data.returnedOn == null
+          && request.resource.data.updatedAt is int);
+      allow update: if isAdmin()
+        || (hasCompletedAccount()
+          && resource.data.borrowerUid == request.auth.uid
+          && (
+            (resource.data.status == 'pending'
+              && request.resource.data.status == 'cancelled'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status', 'updatedAt'
+              ])
+              && request.resource.data.updatedAt is int)
+            || (resource.data.status == 'approved'
+              && request.resource.data.status == 'approved'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'checkedOutAt', 'updatedAt'
+              ])
+              && request.resource.data.checkedOutAt is int
+              && request.resource.data.updatedAt is int)
+            || (resource.data.status == 'approved'
+              && request.resource.data.status == 'returned'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status', 'returnedOn', 'updatedAt'
+              ])
+              && request.resource.data.returnedOn is string
+              && request.resource.data.updatedAt is int)
+          ));
+      allow delete: if isAdmin();
     }
     match /meta/{docId} {
       allow read, write: if isAdmin();
@@ -85,8 +119,12 @@ service cloud.firestore {
           && (
             request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'name', 'email', 'gender', 'college', 'course', 'yearLevel',
-              'block', 'profileUpdatedAt'
+              'block', 'profileImage', 'profileUpdatedAt'
             ])
+            && (!request.resource.data.diff(resource.data).affectedKeys()
+                  .hasAny(['profileImage'])
+              || (request.resource.data.profileImage is string
+                && request.resource.data.profileImage.size() <= 700000))
             || (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'mustChangePassword'
             ])
