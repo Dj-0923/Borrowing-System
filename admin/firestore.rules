@@ -1,0 +1,26 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* The dashboard uses Firebase Authentication, but these rules still allow
+       unauthenticated public access for the public account-request and QR
+       borrowing pages. They do not restrict dashboard data to administrators
+       and must be tightened before using real school data. */
+
+    match /equipment/{itemId} {
+      allow read, write: if true;
+    }
+    match /loans/{loanId} {
+      allow read, write: if true;
+    }
+    match /meta/{docId} {
+      allow read, write: if true;
+    }
+    match /accountRequests/{requestId} {
+      allow read, write: if true;
+    }
+    match /accounts/{accountId} {
+      allow read, write: if true;
+    }
+  }
+}
