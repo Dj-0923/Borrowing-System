@@ -1220,6 +1220,7 @@
     var f = new FormData(form);
     var name = String(f.get('name') || '').trim(), catRaw = String(f.get('category') || '');
     if (!name) return formError('Give the item a name.');
+    name = name.charAt(0).toLocaleUpperCase() + name.slice(1);
     var location = String(f.get('location') || '').trim();
     if (!location) return formError('Enter the item location.');
     var cat = catRaw === 'Other' ? String(f.get('customCategory') || '').trim() : catRaw;
