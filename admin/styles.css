@@ -93,6 +93,27 @@ button:disabled { cursor: not-allowed; }
 
 .bar { background: var(--brand); transition: height .35s cubic-bezier(.2,.8,.2,1); }
 .bar-zero { background: var(--bar-track); }
+.bar-rise { transform-origin: bottom; animation: barRise .65s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--bar-index) * 45ms); }
+@keyframes barRise { from { transform: scaleY(0); opacity: .35; } to { transform: scaleY(1); opacity: 1; } }
+
+.chart-period-toggle { position: relative; isolation: isolate; width: 7.5rem; overflow: hidden; }
+.chart-period-toggle::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 2px auto 2px 2px;
+  width: calc(50% - 2px);
+  border-radius: 999px;
+  background: var(--btn-bg);
+  transition: transform .24s cubic-bezier(.2,.8,.2,1);
+}
+.chart-period-toggle[data-mode="month"]::before { transform: translateX(100%); }
+.chart-period-option { flex: 1; min-width: 0; padding-left: .25rem; padding-right: .25rem; white-space: nowrap; text-align: center; transition: color .2s ease; }
+.bar-count-after-rise { opacity: 0; animation: barCountReveal .18s ease-out forwards; animation-delay: calc(var(--bar-index) * 45ms + 650ms); }
+@keyframes barCountReveal { to { opacity: 1; } }
+
+.assistant-panel { height: min(520px, calc(100dvh - 7rem - env(safe-area-inset-bottom, 0px))); }
+.assistant-chat-log { flex: 1 1 0%; min-height: 0; }
 
 .plot { --plot-h: 118px; }
 @media (min-width: 1280px) { .plot { --plot-h: 170px; } }
@@ -103,6 +124,9 @@ button:disabled { cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
   .view-enter, .pop { animation: none; }
   .bar { transition: none; }
+  .bar-rise { animation: none; }
+  .bar-count-after-rise { opacity: 1; animation: none; }
+  .chart-period-toggle::before, .chart-period-option { transition: none; }
 }
 
 /* Printing a QR label: hide everything except the .qr-print block inside the open modal. */

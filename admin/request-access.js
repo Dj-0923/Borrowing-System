@@ -32,6 +32,7 @@
       body += '<form id="request-form" class="mt-5 grid gap-4" novalidate>' +
         '<div><label class="lbl" for="ra-name">Full name</label><input id="ra-name" name="name" class="field" placeholder="Your full name" maxlength="60" autocomplete="name"></div>' +
         '<div><label class="lbl" for="ra-role">I am a</label><select id="ra-role" name="role" class="field"><option value="student">Student</option><option value="faculty">Faculty</option></select></div>' +
+        '<div><label class="lbl" for="ra-id">Student / faculty ID <span class="font-normal">(optional)</span></label><input id="ra-id" name="idNumber" class="field" placeholder="Your school ID" maxlength="40" autocomplete="off"></div>' +
         '<div><label class="lbl" for="ra-course">Course / Department</label><select id="ra-course" name="course" class="field">' +
         '<option>BS Computer Science</option><option>BS Education</option><option>BS Engineering</option>' +
         '<option>BS Information Technology</option><option>BS Multimedia Arts</option><option>Other</option></select></div>' +
@@ -48,6 +49,7 @@
     ev.preventDefault();
     var name = document.getElementById('ra-name').value.trim();
     var role = document.getElementById('ra-role').value;
+    var idNumber = document.getElementById('ra-id').value.trim();
     var course = document.getElementById('ra-course').value;
     var email = document.getElementById('ra-email').value.trim();
     var errEl = document.getElementById('form-error');
@@ -58,7 +60,7 @@
     var btn = ev.target.querySelector('button[type=submit]');
     btn.disabled = true;
     var ref = requestsCol.doc();
-    ref.set({ id: ref.id, name: name, role: role, course: course, email: email, status: 'pending', submittedAt: Date.now(), updatedAt: Date.now() })
+    ref.set({ id: ref.id, name: name, role: role, idNumber: idNumber, course: course, email: email, status: 'pending', submittedAt: Date.now(), updatedAt: Date.now() })
       .then(function () { submitted = true; render(); })
       .catch(function (err) { btn.disabled = false; errEl.textContent = err.message; });
   }

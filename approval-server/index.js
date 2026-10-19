@@ -119,11 +119,11 @@ async function approveRequest(data) {
   if (
     typeof temporaryPassword !== "string" ||
     temporaryPassword.length < 8 ||
-    temporaryPassword.length > 128
+    temporaryPassword.length > 28
   ) {
     throw new HttpError(
       400,
-      "The temporary password must be between 8 and 128 characters.",
+      "The temporary password must be between 8 and 28 characters.",
     );
   }
 

@@ -130,7 +130,44 @@ service cloud.firestore {
             ])
               && resource.data.mustChangePassword == true
               && request.resource.data.mustChangePassword == false)
+            || (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'notificationPreferences'
+            ])
+              && request.resource.data.notificationPreferences is map
+              && request.resource.data.notificationPreferences.keys().hasOnly([
+                'requestUpdatesEnabled',
+                'returnRemindersEnabled',
+                'pushNotificationsEnabled'
+              ])
+              && request.resource.data.notificationPreferences.requestUpdatesEnabled is bool
+              && request.resource.data.notificationPreferences.returnRemindersEnabled is bool
+              && request.resource.data.notificationPreferences.pushNotificationsEnabled is bool)
           ));
+
+      match /devices/{deviceId} {
+        allow read: if isAdmin()
+          || (hasActiveAccount() && request.auth.uid == accountId);
+        allow create, update: if hasCompletedAccount()
+          && request.auth.uid == accountId
+          && request.resource.data.keys().hasOnly(['token', 'updatedAt'])
+          && request.resource.data.token is string
+          && request.resource.data.token.size() > 0
+          && request.resource.data.updatedAt is int;
+        allow delete: if isAdmin()
+          || (hasActiveAccount() && request.auth.uid == accountId);
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if isAdmin()
+          || (hasActiveAccount() && request.auth.uid == accountId);
+        allow create, delete: if isAdmin();
+        allow update: if isAdmin()
+          || (hasActiveAccount()
+            && request.auth.uid == accountId
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['isRead'])
+            && request.resource.data.isRead is bool);
+      }
     }
     match /admins/{adminId} {
       allow read: if signedIn() && request.auth.uid == adminId;

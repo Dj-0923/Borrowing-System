@@ -112,7 +112,9 @@
 
   function watch(col, key) {
     col.onSnapshot(function (snap) {
-      db[key] = snap.docs.map(function (d) { return d.data(); });
+      db[key] = snap.docs.map(function (d) {
+        return Object.assign({}, d.data(), { id: d.id });
+      });
       loaded[key] = true; syncError = null;
       if (allLoaded()) render();
     }, function (err) {
@@ -160,15 +162,22 @@
   var loanStatus = function (l) { return (l.status === 'approved' && l.end < today()) ? 'overdue' : l.status; };
   var isCheckout = function (l) { return l.status === 'approved' || l.status === 'returned'; };
   var pendingRequests = function () { return db.accountRequests.filter(function (r) { return r.status === 'pending'; }); };
-  /* Loans only store the borrower's typed name, not an account id, so this
-     matches by name (case/space-insensitive). Two accounts sharing the exact
-     same name would be matched together — a known limit of this simpler
-     setup; linking by email would need the request-access flow to also
-     collect email with every loan, which it doesn't today. */
+  function borrowerName(loan) {
+    var account = loan.borrowerUid && db.accounts.find(function (a) {
+      return a.id === loan.borrowerUid;
+    });
+    return account && account.name ? account.name : loan.borrower || '';
+  }
+  /* Prefer the account link on mobile loans; keep name matching for older
+     admin-created loans that predate borrowerUid. */
   var normName = function (s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); };
   function loansFor(account) {
     var n = normName(account.name);
-    return db.loans.filter(function (l) { return normName(l.borrower) === n; })
+    return db.loans.filter(function (l) {
+      return l.borrowerUid
+        ? l.borrowerUid === account.id
+        : normName(l.borrower) === n;
+    })
       .sort(function (a, b) { return b.updatedAt - a.updatedAt; });
   }
   function userStatus(account) {
@@ -233,19 +242,19 @@
       if (st === 'overdue') {
         var n = diffDays(t, l.end);
         out.push({ sev: 0, tone: 'bad', icon: 'alert', title: l.name + ' is ' + plural(n, 'day') + ' overdue',
-          body: l.borrower + ' was due back ' + fmt(l.end) + '.', action: { label: 'Mark returned', act: 'return', id: l.id } });
+          body: borrowerName(l) + ' was due back ' + fmt(l.end) + '.', action: { label: 'Mark returned', act: 'return', id: l.id } });
       } else if (st === 'approved') {
         var d = diffDays(l.end, t);
         if (d === 0 || d === 1) {
           out.push({ sev: 1, tone: 'warn', icon: 'clock', title: l.name + ' is due ' + (d === 0 ? 'today' : 'tomorrow'),
-            body: l.borrower + ' returns it ' + fmt(l.end) + '.', action: { label: 'Mark returned', act: 'return', id: l.id } });
+            body: borrowerName(l) + ' returns it ' + fmt(l.end) + '.', action: { label: 'Mark returned', act: 'return', id: l.id } });
         }
       } else if (st === 'pending') {
-        out.push({ sev: 1, tone: 'warn', icon: 'filecheck', title: l.borrower + ' requested ' + l.name,
+        out.push({ sev: 1, tone: 'warn', icon: 'filecheck', title: borrowerName(l) + ' requested ' + l.name,
           body: fmt(l.start) + ' → ' + fmt(l.end), action: { label: 'Review', act: 'nav', view: 'approvals' } });
       } else if (st === 'returned' && l.returnedOn && diffDays(t, l.returnedOn) <= 2) {
         out.push({ sev: 3, tone: 'ok', icon: 'check', title: l.name + ' was returned',
-          body: l.borrower + ' returned it ' + fmt(l.returnedOn) + '.' });
+          body: borrowerName(l) + ' returned it ' + fmt(l.returnedOn) + '.' });
       }
     });
     db.equipment.filter(function (e) { return e.maintenance; }).forEach(function (e) {
@@ -261,7 +270,7 @@
 
   /* ---------- ui state ---------- */
   var state = {
-    view: 'dashboard', lastView: null, chartMode: 'day', sidebarOpen: false, assistantOpen: false, modal: null,
+    view: 'dashboard', lastView: null, lastChartKey: null, chartMode: 'day', chartAnimation: false, sidebarOpen: false, assistantOpen: false, modal: null,
     filter: { inventory: 'all', history: 'all', usersRole: 'all', usersCourse: 'all' }, q: { inventory: '', history: '', users: '' },
     tab: { requests: 'pending' },
     chat: [{ from: 'bot', text: "Hi, I'm the Lendy assistant. Ask me what's going on with the equipment." }]
@@ -398,20 +407,20 @@
     var total = data.reduce(function (a, d) { return a + d.count; }, 0);
     var tog = function (m, label) {
       var on = state.chartMode === m;
-      return '<button data-action="chart-mode" data-mode="' + m + '" aria-pressed="' + on + '" class="px-3 py-1 rounded-full text-[11px] font-semibold ' +
-        (on ? 'bg-[color:var(--btn-bg)] text-white' : 'text-ink hover:bg-tint') + '">' + label + '</button>';
+      return '<button data-action="chart-mode" data-mode="' + m + '" aria-pressed="' + on + '" class="chart-period-option relative z-10 px-3 py-1 rounded-full text-[11px] font-semibold ' +
+        (on ? 'text-white' : 'text-ink') + '">' + label + '</button>';
     };
     return '<div class="rounded-2xl border border-line bg-card shadow-soft p-5">' +
       '<div class="flex items-start justify-between gap-3"><div>' +
       '<h3 class="text-[13px] font-bold text-brand-deep">Borrow activity</h3>' +
       '<p class="text-[11px] text-muted mt-0.5">Items checked out, by period · ' + plural(total, 'checkout') + (state.chartMode === 'day' ? ' in the last 7 days' : ' in the last 12 months') + '</p></div>' +
-      '<div class="inline-flex rounded-full border border-muted p-0.5 shrink-0" role="group" aria-label="Chart period">' + tog('day', 'Day') + tog('month', 'Month') + '</div></div>' +
+      '<div class="chart-period-toggle inline-flex rounded-full border border-muted p-0.5 shrink-0" data-mode="' + state.chartMode + '" role="group" aria-label="Chart period">' + tog('day', 'Day') + tog('month', 'Month') + '</div></div>' +
       '<div class="plot mt-5 flex items-end gap-1.5 sm:gap-3 xl:gap-5 h-[190px] xl:h-[250px]">' +
-      data.map(function (d) {
+      data.map(function (d, index) {
         var h = d.count === 0 ? '3px' : 'max(8px,calc(var(--plot-h) * ' + (d.count / max).toFixed(3) + '))';
         return '<div class="group flex-1 min-w-0 h-full flex flex-col justify-end items-center gap-1.5" title="' + esc(d.sub) + ': ' + plural(d.count, 'checkout') + '">' +
-          '<span class="text-[11px] font-semibold text-brand-deep tnum ' + (d.count ? '' : 'opacity-0') + ' group-hover:opacity-100 transition-opacity">' + d.count + '</span>' +
-          '<div class="w-full max-w-[36px] xl:max-w-[60px] rounded-t-md bar ' + (d.count === 0 ? 'bar-zero' : '') + '" style="height:' + h + '"></div>' +
+          '<span class="text-[11px] font-semibold text-brand-deep tnum ' + (d.count ? (state.chartAnimation ? 'bar-count-after-rise' : '') : 'opacity-0') + ' group-hover:opacity-100 transition-opacity" style="--bar-index:' + index + '">' + d.count + '</span>' +
+          '<div class="w-full max-w-[36px] xl:max-w-[60px] rounded-t-md bar ' + (d.count === 0 ? 'bar-zero' : '') + (state.chartAnimation ? ' bar-rise' : '') + '" style="height:' + h + ';--bar-index:' + index + '"></div>' +
           '<span class="text-[10px] sm:text-[11px] ' + (d.isNow ? 'font-bold text-ink' : 'font-medium text-muted') + '">' + d.label + '</span></div>';
       }).join('') + '</div></div>';
   }
@@ -436,7 +445,7 @@
       '<div class="grid ' + COLS + ' gap-3 px-4 py-3 bg-head text-[13px] font-bold"><span>Equipment</span><span>Borrower</span><span>Dates</span><span class="text-right">Status</span></div>' +
       loans.map(function (l) {
         return '<div class="grid ' + COLS + ' gap-3 px-4 py-3.5 items-center text-[13px] border-t border-line">' +
-          '<span class="truncate font-medium">' + esc(l.name) + '</span><span class="truncate">' + esc(l.borrower) + '</span>' +
+          '<span class="truncate font-medium">' + esc(l.name) + '</span><span class="truncate">' + esc(borrowerName(l)) + '</span>' +
           '<span class="tnum text-muted">' + fmt(l.start) + ' → ' + fmt(l.end) + '</span>' +
           '<span class="text-right">' + pill(loanStatus(l)) + '</span></div>';
       }).join('') + '</div></div>';
@@ -469,7 +478,7 @@
         return '<div class="rounded-2xl bg-card border border-line shadow-soft p-4 sm:p-5 flex flex-wrap items-center gap-4">' +
           mediaTile(e, 'w-12 h-12') +
           '<div class="min-w-[180px] flex-1"><p class="font-semibold">' + esc(l.name) + (e ? ' <span class="text-xs font-normal text-muted">' + esc(e.tag) + '</span>' : '') + '</p>' +
-          '<p class="text-sm text-muted mt-0.5">' + esc(l.borrower) + ' · <span class="tnum">' + fmt(l.start) + ' → ' + fmt(l.end) + '</span> · ' + plural(days, 'day') + '</p>' +
+          '<p class="text-sm text-muted mt-0.5">' + esc(borrowerName(l)) + ' · <span class="tnum">' + fmt(l.start) + ' → ' + fmt(l.end) + '</span> · ' + plural(days, 'day') + '</p>' +
           '<p class="mt-2 flex items-center gap-2 text-xs text-muted">' + pill(st) + note + '</p></div>' +
           '<div class="flex gap-2 ml-auto">' +
           '<button class="btn btn-danger" data-action="reject" data-id="' + l.id + '">' + icon('x', 'w-4 h-4') + 'Reject</button>' +
@@ -633,7 +642,7 @@
         '<div class="grid ' + C + ' gap-3 px-4 py-3 bg-head text-[13px] font-bold"><span>Equipment</span><span>Category</span><span>Status</span><span class="text-right">Actions</span></div>' +
         rows.map(function (e) {
           var st = itemStatus(e), al = activeLoanFor(e.id), sub = '';
-          if (al) sub = '<p class="mt-1 text-[11px] ' + (loanStatus(al) === 'overdue' ? 't-bad font-semibold' : 'text-muted') + '">' + esc(al.borrower) + ' · due ' + fmt(al.end) + '</p>';
+          if (al) sub = '<p class="mt-1 text-[11px] ' + (loanStatus(al) === 'overdue' ? 't-bad font-semibold' : 'text-muted') + '">' + esc(borrowerName(al)) + ' · due ' + fmt(al.end) + '</p>';
           var acts, qrBtn = '<button class="btn btn-ghost btn-sm" data-action="qr" data-id="' + e.id + '" aria-label="Print QR label for ' + esc(e.name) + '">' + icon('qr', 'w-3.5 h-3.5') + '</button>';
           if (st === 'borrowed') acts = '<button class="btn btn-ghost btn-sm" data-action="return" data-id="' + al.id + '">' + icon('undo', 'w-3.5 h-3.5') + 'Mark returned</button>' + qrBtn;
           else if (st === 'available') acts = '<button class="btn btn-ghost btn-sm" data-action="maintenance-on" data-id="' + e.id + '">' + icon('wrench', 'w-3.5 h-3.5') + 'Maintenance</button>' +
@@ -672,7 +681,7 @@
     var rows = loans.filter(function (l) {
       var st = loanStatus(l);
       var ok = f === 'all' || (f === 'active' ? (st === 'approved' || st === 'overdue') : st === f);
-      return ok && (!q || (l.name + ' ' + l.borrower).toLowerCase().indexOf(q) !== -1);
+      return ok && (!q || (l.name + ' ' + borrowerName(l)).toLowerCase().indexOf(q) !== -1);
     });
     var C = 'grid-cols-[minmax(0,1.6fr)_minmax(0,1.2fr)_minmax(0,1.4fr)_104px]';
     var table;
@@ -682,7 +691,7 @@
         rows.map(function (l) {
           var st = loanStatus(l);
           return '<div class="grid ' + C + ' gap-3 px-4 py-3.5 items-center text-[13px] border-t border-line">' +
-            '<span class="truncate font-medium">' + esc(l.name) + '</span><span class="truncate">' + esc(l.borrower) + '</span>' +
+            '<span class="truncate font-medium">' + esc(l.name) + '</span><span class="truncate">' + esc(borrowerName(l)) + '</span>' +
             '<span class="tnum text-muted">' + fmt(l.start) + ' → ' + fmt(l.end) + '</span>' +
             '<span class="text-center">' + pill(st) + '</span></div>';
         }).join('') + '</div></div>';
@@ -773,12 +782,20 @@
     var a = document.activeElement;
     var keep = (a && a.matches && a.matches('input[data-search]')) ? { id: a.id, pos: a.selectionStart } : null;
     var changed = state.lastView !== state.view;
+    var chartKey = state.view === 'dashboard'
+      ? state.chartMode + ':' + chartData(state.chartMode).map(function (d) { return d.label + '=' + d.count; }).join('|')
+      : null;
+    var chartDataChanged = state.view === 'dashboard' && state.lastChartKey !== null && state.lastChartKey !== chartKey;
+    var animateChart = state.view === 'dashboard' && (changed || state.chartAnimation || chartDataChanged);
+    if (state.view === 'dashboard') state.lastChartKey = chartKey;
+    state.chartAnimation = animateChart;
     state.lastView = state.view;
     app.innerHTML =
       (state.sidebarOpen ? '<div data-action="toggle-sidebar" class="fixed inset-0 z-30 bg-black/40 lg:hidden"></div>' : '') +
       sidebar() +
       '<div class="lg:pl-[266px] min-h-full">' + mobileBar() +
-      '<main class="' + (changed ? 'view-enter ' : '') + 'px-5 sm:px-8 lg:px-12 xl:px-16 pt-8 lg:pt-14 pb-28 max-w-[2000px]">' + VIEWS[state.view]() + '</main></div>';
+      '<main class="' + (changed ? 'view-enter ' : '') + (animateChart ? 'chart-enter ' : '') + 'px-5 sm:px-8 lg:px-12 xl:px-16 pt-8 lg:pt-14 pb-28 max-w-[2000px]">' + VIEWS[state.view]() + '</main></div>';
+    state.chartAnimation = false;
     if (keep) {
       var el = document.getElementById(keep.id);
       if (el) { el.focus(); try { el.setSelectionRange(keep.pos, keep.pos); } catch (e) { /* ignore */ } }
@@ -814,14 +831,14 @@
     var cur = activeLoanFor(e.id);
     if (cur) { toast(e.name + ' is still on loan until ' + fmt(cur.end) + '. Mark it returned first.', 'bad'); return; }
     loansCol.doc(id).update({ status: 'approved', updatedAt: Date.now() })
-      .then(function () { toast('Approved ' + e.name + ' for ' + l.borrower + '.'); })
+      .then(function () { toast('Approved ' + e.name + ' for ' + borrowerName(l) + '.'); })
       .catch(fail('Could not approve the request'));
   }
   function reject(id) {
     var l = db.loans.find(function (x) { return x.id === id; });
     if (!l || l.status !== 'pending') return;
     loansCol.doc(id).update({ status: 'rejected', updatedAt: Date.now() })
-      .then(function () { toast('Rejected the request from ' + l.borrower + '.'); })
+      .then(function () { toast('Rejected the request from ' + borrowerName(l) + '.'); })
       .catch(fail('Could not reject the request'));
   }
   function approveRequest(id) {
@@ -837,8 +854,8 @@
     }
     if (!r.authUid) return formError('This request was created before the free-plan account flow. Ask the user to submit a new request.');
     var password = String(new FormData(form).get('temporaryPassword') || '');
-    if (password.length < 8 || password.length > 128) {
-      return formError('Temporary password must be between 8 and 128 characters.');
+    if (password.length < 8 || password.length > 28) {
+      return formError('Temporary password must be between 8 and 28 characters.');
     }
     var submitButton = form.querySelector('button[type=submit]');
     if (submitButton) submitButton.disabled = true;
@@ -1004,9 +1021,12 @@
     return modalHead('Add equipment', 'New items start as available.') +
       '<form data-form="add" novalidate class="mt-5 grid gap-4">' +
       '<div><label class="lbl" for="f-name">Name</label><input id="f-name" name="name" class="field" placeholder="e.g. Sony A7 Camera" maxlength="60" autocomplete="off"></div>' +
+      '<div><label class="lbl" for="f-location">Location</label><input id="f-location" name="location" class="field" placeholder="e.g. AV Storage, Room 101" maxlength="80" autocomplete="off"></div>' +
       '<div class="grid grid-cols-2 gap-3">' +
       '<div><label class="lbl" for="f-cat">Category</label><select id="f-cat" name="category" class="field">' +
-      Object.keys(CATEGORIES).map(function (c) { return '<option>' + c + '</option>'; }).join('') + '</select></div>' +
+      Object.keys(CATEGORIES).map(function (c) { return '<option>' + c + '</option>'; }).join('') + '</select>' +
+      '<div id="f-custom-category-wrap" class="mt-3" hidden><label class="lbl" for="f-custom-category">New category</label>' +
+      '<input id="f-custom-category" name="customCategory" class="field" placeholder="Enter category name" maxlength="40" autocomplete="off"></div></div>' +
       '<div><label class="lbl" for="f-tag">Asset tag <span class="font-normal">(optional)</span></label><input id="f-tag" name="tag" class="field" placeholder="Auto-generated" maxlength="16" autocomplete="off"></div></div>' +
       '<div><label class="lbl" for="f-image">Photo <span class="font-normal">(optional)</span></label>' +
       '<div class="flex items-center gap-3">' +
@@ -1033,8 +1053,8 @@
       '<p class="text-sm text-muted mt-3">After approval, the user will see the temporary password in the mobile app and must change it after signing in.</p>' +
       '<form data-form="approve-account" data-request-id="' + esc(request.id) + '" novalidate class="mt-5 grid gap-4">' +
       '<div><label class="lbl" for="approval-password">Temporary password</label>' +
-      '<input id="approval-password" name="temporaryPassword" type="text" class="field" minlength="8" maxlength="128" autocomplete="off" required>' +
-      '<p class="text-[11px] text-muted mt-1">Use 8 to 128 characters. The user must change it at first login.</p></div>' +
+      '<input id="approval-password" name="temporaryPassword" type="text" class="field" minlength="8" maxlength="28" autocomplete="off" required>' +
+      '<p class="text-[11px] text-muted mt-1">Use 8 to 28 characters. The user must change it at first login.</p></div>' +
       '<p id="form-error" class="text-sm t-bad min-h-[1.25rem]" role="alert"></p>' +
       '<div class="flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button>' +
       '<button type="submit" class="btn btn-primary">Approve and show password</button></div></form>';
@@ -1054,23 +1074,23 @@
       '<img src="' + qrImg + '" alt="QR code for ' + esc(e.name) + '" class="w-44 h-44 rounded-lg" width="176" height="176">' +
       '<p class="font-display font-bold mt-1">' + esc(e.name) + '</p>' +
       '<p class="text-xs text-muted">' + esc(e.tag) + '</p></div>' +
-      '<p class="text-xs text-muted mt-3 break-all">' + esc(url) + '</p>' +
       '<div class="mt-5 flex flex-wrap justify-end gap-2">' +
-      '<a class="btn btn-ghost" href="' + esc(url) + '" target="_blank" rel="noopener">Open item page</a>' +
       '<button type="button" class="btn btn-primary" data-action="print-qr">Print label</button></div>';
   }
   function editProfileForm() {
     var p = profileData();
-    return modalHead('Edit profile') +
-      '<form data-form="edit-profile" novalidate class="mt-5 grid gap-4">' +
-      '<div><label class="lbl" for="p-photo">Profile picture</label>' +
-      '<div class="flex items-center gap-3">' +
-      '<span id="profile-photo-preview" class="shrink-0 w-14 h-14 rounded-full overflow-hidden flex items-center justify-center text-white font-display font-bold" style="background:var(--btn-bg)">' +
-      (p.photo ? '<img src="' + p.photo + '" alt="" class="w-full h-full object-cover">' : esc(initials(p.name))) + '</span>' +
-      '<input id="p-photo" name="photo" type="file" accept="image/*" class="field" style="padding:.5rem .7rem"></div>' +
-      '<p class="text-[11px] text-muted mt-1.5">JPG or PNG, resized automatically.</p></div>' +
-      '<div><label class="lbl" for="p-name">Full name</label><input id="p-name" name="name" class="field" value="' + esc(p.name) + '" maxlength="60" autocomplete="off"></div>' +
-      '<p class="text-xs text-muted">Account email: ' + esc(p.email) + '</p>' +
+    return modalHead('Edit profile', 'Update how you appear across the admin console.') +
+      '<form data-form="edit-profile" novalidate class="mt-5 grid gap-3">' +
+      '<div class="flex flex-col items-center gap-2 pb-1">' +
+      '<span id="profile-photo-preview" class="shrink-0 w-24 h-24 rounded-full overflow-hidden flex items-center justify-center text-white font-display font-bold text-2xl border border-brand" style="background:var(--btn-bg)">' +
+      (p.photo ? '<img src="' + esc(p.photo) + '" alt="" class="w-full h-full object-cover">' : esc(initials(p.name))) + '</span>' +
+      '<input id="p-photo" name="photo" type="file" accept="image/*" class="sr-only">' +
+      '<label for="p-photo" class="btn btn-ghost btn-sm">Change profile</label>' +
+      '<p class="text-[11px] text-muted">JPG or PNG, resized automatically.</p></div>' +
+      '<div><label class="lbl" for="p-name">Full name</label><input id="p-name" name="name" class="field" value="' + esc(p.name) + '" maxlength="60" autocomplete="name"></div>' +
+      '<div><label class="lbl" for="p-role">Role</label><input id="p-role" class="field" value="' + esc(p.role) + '" readonly></div>' +
+      '<div><label class="lbl" for="p-email">Email</label><input id="p-email" name="email" type="email" class="field" value="' + esc(p.email) + '" readonly aria-describedby="p-email-help">' +
+      '<p id="p-email-help" class="text-[11px] text-muted mt-1">Managed by Firebase Authentication.</p></div>' +
       '<p id="form-error" class="text-sm t-bad min-h-[1.25rem]" role="alert"></p>' +
       '<div class="flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button type="submit" class="btn btn-primary">Save changes</button></div></form>';
   }
@@ -1087,7 +1107,7 @@
     return modalHead(a.name, esc(a.email)) +
       '<div class="mt-4 flex flex-wrap items-center gap-2">' + rolePill(a.role) + pill(revoked ? 'revoked' : 'active') + '</div>' +
       '<div class="mt-4 rounded-xl border border-line p-3 flex items-center justify-between">' +
-      '<span class="text-xs text-muted">Access code</span><span class="font-display font-bold tracking-widest">' + esc(a.code) + '</span></div>' +
+      '<span class="text-xs text-muted">School ID</span><span class="font-display font-bold text-xs">' + esc(a.idNumber || '\u2014') + '</span></div>' +
       '<div class="mt-6 flex flex-wrap justify-end gap-2">' +
       '<button class="btn btn-ghost" data-action="' + (revoked ? 'restore-account' : 'revoke-account') + '" data-id="' + a.id + '">' + (revoked ? 'Restore access' : 'Revoke access') + '</button>' +
       '<button class="btn btn-danger" data-action="delete-user-account" data-id="' + a.id + '">Delete account</button></div>';
@@ -1097,7 +1117,7 @@
     if (!a) return modalHead('User not found') + '<p class="text-sm text-muted mt-3">This account may have already been removed.</p>' +
       '<div class="mt-6 flex justify-end"><button class="btn btn-ghost" data-action="close-modal">Close</button></div>';
     var s = userSummary(a);
-    var recent = s.loans.slice(0, 5);
+    var recent = s.loans.slice(0, 3);
     var statCard = function (n, label, bad) {
       return '<div class="rounded-xl border border-line p-3">' +
         '<span class="block font-display font-bold text-2xl leading-none ' + (bad ? 't-bad' : 'text-brand-deep') + '">' + n + '</span>' +
@@ -1107,9 +1127,7 @@
       return '<div class="flex items-start justify-between gap-4 border-b border-line py-2.5 last:border-b-0">' +
         '<span class="text-xs text-muted">' + label + '</span><span class="text-right text-sm font-medium break-words">' + esc(value || '\u2014') + '</span></div>';
     };
-    var profile = a.profileImage
-      ? '<img src="' + esc(a.profileImage) + '" alt="' + esc(a.name) + ' profile photo" class="w-16 h-16 rounded-full object-cover border-2 border-white shadow">'
-      : '<span class="w-16 h-16 rounded-full flex items-center justify-center text-white font-display font-bold text-lg" style="background:var(--btn-bg)">' + esc(initials(a.name)) + '</span>';
+    var profile = userAvatar(a, 'w-16 h-16', 'text-lg');
     var college = a.college || a.course;
     return '<div class="-m-6 mb-5 px-6 py-4 rounded-t-2xl text-white flex items-center gap-3" style="background:var(--btn-bg)">' +
       '<button data-action="close-modal" class="w-7 h-7 -ml-1 rounded-md flex items-center justify-center hover:bg-white/15" aria-label="Back">' + icon('chevronleft', 'w-5 h-5') + '</button>' +
@@ -1119,9 +1137,8 @@
       '<div class="mt-4 rounded-xl border border-line px-3">' +
       detailRow('Gender', a.gender) +
       detailRow('Email', a.email) +
-      detailRow(a.role === 'faculty' ? 'College / Department' : 'College', college) +
-      detailRow('Year level', a.yearLevel) +
-      detailRow('Block', a.block) +
+      detailRow('College', college) +
+      (a.role === 'faculty' ? '' : detailRow('Year level', a.yearLevel) + detailRow('Block', a.block)) +
       '</div>' +
       '<p class="text-xs font-bold uppercase tracking-wide text-muted mt-5">Recent borrowings</p>' +
       (recent.length
@@ -1134,19 +1151,20 @@
         : '<p class="text-sm text-muted mt-2">No borrowing activity yet.</p>') +
       '<p class="text-xs font-bold uppercase tracking-wide text-muted mt-5">Borrowing summary</p>' +
       '<div class="mt-2 grid grid-cols-2 gap-3">' +
-      statCard(s.totalBorrowed, 'Total borrowed') + statCard(s.dueSoon, 'Due soon', s.dueSoon > 0) +
-      statCard(s.returned, 'Returned') + statCard(s.currentBorrowed, 'Current borrowed') +
+      statCard(s.totalBorrowed, 'Total borrowings') + statCard(s.dueSoon, 'Due soon', s.dueSoon > 0) +
+      statCard(s.returned, 'Returned') + statCard(s.currentBorrowed, 'Borrowed now') +
       '</div></div>';
   }
   function renderModal() {
     var m = state.modal, root = $('#modal-root');
     if (!m) { root.innerHTML = ''; return; }
     var inner = m.type === 'request' ? requestForm(m) : m.type === 'add' ? addForm() : m.type === 'qr' ? qrBody(m) :
+      m.type === 'approve-account' ? approveAccountForm(m) :
       m.type === 'edit-profile' ? editProfileForm() : m.type === 'change-password' ? changePasswordBody() :
       m.type === 'account' ? accountBody(m) : m.type === 'user-detail' ? userDetailBody(m) : confirmBody(m);
     root.innerHTML = '<div data-action="backdrop" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4" style="padding-bottom:calc(1rem + env(safe-area-inset-bottom,0px))">' +
-      '<div role="dialog" aria-modal="true" class="pop w-full max-w-md max-h-full overflow-y-auto rounded-2xl bg-card border border-line p-6 shadow-2xl">' + inner + '</div></div>';
-    var first = root.querySelector('input:not([type=checkbox]), select');
+      '<div role="dialog" aria-modal="true" class="pop w-full ' + (m.type === 'edit-profile' ? 'max-w-sm' : 'max-w-md') + ' max-h-full overflow-y-auto rounded-2xl bg-card border border-line p-6 shadow-2xl">' + inner + '</div></div>';
+    var first = root.querySelector('input:not([type=checkbox]):not([type=file]):not([type=hidden]):not([readonly]), select');
     if (first) first.focus(); else { var b = root.querySelector('.btn-primary, .btn-danger'); if (b) b.focus(); }
   }
   function openModal(m) { state.modal = m; renderModal(); }
@@ -1200,9 +1218,12 @@
 
   function submitAdd(form) {
     var f = new FormData(form);
-    var name = String(f.get('name') || '').trim(), catRaw = f.get('category');
+    var name = String(f.get('name') || '').trim(), catRaw = String(f.get('category') || '');
     if (!name) return formError('Give the item a name.');
-    var cat = CATEGORIES[catRaw] ? catRaw : 'Other';
+    var location = String(f.get('location') || '').trim();
+    if (!location) return formError('Enter the item location.');
+    var cat = catRaw === 'Other' ? String(f.get('customCategory') || '').trim() : catRaw;
+    if (!cat) return formError('Enter a name for the new category.');
     var file = form.elements.image && form.elements.image.files[0];
     var submitBtn = form.querySelector('button[type=submit]');
     if (submitBtn) submitBtn.disabled = true;
@@ -1210,7 +1231,7 @@
       .then(function (imageData) {
         var ref = equipmentCol.doc();
         var tag = String(f.get('tag') || '').trim().toUpperCase() || ((TAG_PREFIX[cat] || 'OT') + '-' + ref.id.slice(0, 4).toUpperCase());
-        return ref.set({ id: ref.id, name: name, category: cat, tag: tag, maintenance: false, image: imageData || null }).then(function () { return ref.id; });
+        return ref.set({ id: ref.id, name: name, category: cat, tag: tag, location: location, maintenance: false, image: imageData || null }).then(function () { return ref.id; });
       })
       .then(function (newId) {
         toast('Added ' + name + ' to the inventory.');
@@ -1247,7 +1268,7 @@
     var s = stats(), t = today(), list;
     if (key === 'overdue') {
       list = db.loans.filter(function (l) { return loanStatus(l) === 'overdue'; });
-      return list.length ? plural(list.length, 'item') + ' overdue: ' + list.map(function (l) { return l.name + ' (' + l.borrower + ', ' + diffDays(t, l.end) + 'd late)'; }).join('; ') + '.' : 'Nothing is overdue right now.';
+      return list.length ? plural(list.length, 'item') + ' overdue: ' + list.map(function (l) { return l.name + ' (' + borrowerName(l) + ', ' + diffDays(t, l.end) + 'd late)'; }).join('; ') + '.' : 'Nothing is overdue right now.';
     }
     if (key === 'available') {
       list = db.equipment.filter(function (e) { return itemStatus(e) === 'available'; });
@@ -1255,7 +1276,7 @@
     }
     if (key === 'pending') {
       list = db.loans.filter(function (l) { return l.status === 'pending'; });
-      return list.length ? plural(list.length, 'request') + ' waiting: ' + list.map(function (l) { return l.borrower + ' wants ' + l.name + ' (' + fmt(l.start) + ')'; }).join('; ') + '.' : 'No pending requests. The approval queue is clear.';
+      return list.length ? plural(list.length, 'request') + ' waiting: ' + list.map(function (l) { return borrowerName(l) + ' wants ' + l.name + ' (' + fmt(l.start) + ')'; }).join('; ') + '.' : 'No pending requests. The approval queue is clear.';
     }
     if (key === 'busiest') {
       var by = [0, 0, 0, 0, 0, 0, 0];
@@ -1279,27 +1300,41 @@
   }
   function submitAssistant(form) {
     var input = document.getElementById('assistant-input');
-    var text = input.value.trim();
-    if (!text) return;
-    state.chat.push({ from: 'me', text: text }, { from: 'bot', text: answerFreeText(text) });
-    renderAssistant();
+    sendAssistantMessage(input.value, null);
     var again = document.getElementById('assistant-input');
     if (again) again.focus();
   }
-  function renderAssistant() {
+  function sendAssistantMessage(text, key) {
+    text = String(text || '').trim();
+    if (!text) return;
+    state.chat.push({ from: 'me', text: text });
+    try {
+      state.chat.push({ from: 'bot', text: key ? answer(key) : answerFreeText(text) });
+    } catch (err) {
+      console.error('Lendy assistant could not answer from the current data.', err);
+      state.chat.push({
+        from: 'bot',
+        text: 'I couldn\u2019t read the current equipment data to answer. Please check the dashboard data and try again.'
+      });
+    }
+    renderAssistant();
+  }
+  function renderAssistant(animateOpen) {
     var root = $('#assistant-root');
     var panel = '';
     if (state.assistantOpen) {
-      panel = '<div class="pop fixed right-4 sm:right-5 z-40 w-[calc(100vw-2rem)] max-w-sm rounded-2xl bg-card border border-line shadow-2xl flex flex-col overflow-hidden" style="bottom:calc(5.75rem + env(safe-area-inset-bottom,0px))" role="dialog" aria-label="Lendy assistant">' +
+      panel = '<div class="' + (animateOpen ? 'pop ' : '') + 'assistant-panel fixed right-4 sm:right-5 z-40 w-[calc(100vw-2rem)] max-w-sm rounded-2xl bg-card border border-line shadow-2xl flex flex-col overflow-hidden" style="bottom:calc(5.75rem + env(safe-area-inset-bottom,0px))" role="dialog" aria-label="Lendy assistant">' +
         '<div class="flex items-center justify-between px-4 py-3 text-white" style="background:linear-gradient(90deg,var(--side-from),var(--side-to))"><span class="font-display font-bold">Ask Lendy</span>' +
         '<button data-action="assistant-toggle" class="w-7 h-7 rounded-md flex items-center justify-center hover:bg-white/15" aria-label="Close assistant">' + icon('x', 'w-4 h-4') + '</button></div>' +
-        '<div id="chat-log" class="p-4 grid gap-2.5 max-h-[38vh] overflow-y-auto text-sm">' +
+        '<div id="chat-log" class="assistant-chat-log p-4 grid content-start gap-2.5 overflow-y-auto text-sm">' +
         state.chat.map(function (m) {
           return m.from === 'me'
             ? '<div class="justify-self-end max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-white" style="background:var(--btn-bg)">' + esc(m.text) + '</div>'
             : '<div class="justify-self-start max-w-[90%] rounded-2xl rounded-bl-md px-3.5 py-2 bg-tint">' + esc(m.text) + '</div>';
         }).join('') + '</div>' +
-        '<div class="px-4 pb-3 flex flex-wrap gap-2">' + ASK.map(function (a) { return '<button class="chip" data-action="assistant-ask" data-key="' + a[0] + '">' + a[1] + '</button>'; }).join('') + '</div>' +
+        (state.chat.length === 1
+          ? '<div class="px-4 pb-3 flex flex-wrap gap-2">' + ASK.map(function (a) { return '<button class="chip" data-action="assistant-ask" data-key="' + a[0] + '">' + a[1] + '</button>'; }).join('') + '</div>'
+          : '') +
         '<form id="assistant-form" class="px-4 pb-4 flex gap-2 border-t border-line pt-3">' +
         '<input id="assistant-input" type="text" class="field flex-1" placeholder="Ask about equipment\u2026" autocomplete="off" maxlength="200">' +
         '<button type="submit" class="w-10 h-10 shrink-0 rounded-xl text-white flex items-center justify-center" style="background:var(--btn-bg)" aria-label="Send">' + icon('send', 'w-4 h-4') + '</button>' +
@@ -1314,6 +1349,11 @@
 
   /* ---------- events ---------- */
   document.addEventListener('click', function (ev) {
+    var assistantRoot = $('#assistant-root');
+    if (state.assistantOpen && assistantRoot && !assistantRoot.contains(ev.target)) {
+      state.assistantOpen = false;
+      renderAssistant();
+    }
     var el = ev.target.closest('[data-action]');
     if (!el) return;
     var a = el.dataset.action, id = el.dataset.id;
@@ -1325,7 +1365,13 @@
         if (state.view === 'users') { state.filter.usersRole = 'all'; state.filter.usersCourse = 'all'; state.q.users = ''; }
         render(); break;
       case 'toggle-sidebar': state.sidebarOpen = !state.sidebarOpen; render(); break;
-      case 'chart-mode': state.chartMode = el.dataset.mode; render(); break;
+      case 'chart-mode':
+        if (state.chartMode !== el.dataset.mode) {
+          state.chartMode = el.dataset.mode;
+          state.chartAnimation = true;
+          render();
+        }
+        break;
       case 'inv-filter': state.filter.inventory = el.dataset.value; render(); break;
       case 'hist-filter': state.filter.history = el.dataset.value; render(); break;
       case 'approve': approve(id); break;
@@ -1381,11 +1427,14 @@
       case 'backdrop': if (ev.target === el) closeModal(); break;
       case 'close-modal': closeModal(); break;
       case 'confirm-yes': var fn = pendingConfirm; closeModal(); if (fn) fn(); break;
-      case 'assistant-toggle': state.assistantOpen = !state.assistantOpen; renderAssistant(); break;
+      case 'assistant-toggle':
+        state.assistantOpen = !state.assistantOpen;
+        renderAssistant(state.assistantOpen);
+        break;
       case 'assistant-ask':
         var q = ASK.find(function (x) { return x[0] === el.dataset.key; });
-        state.chat.push({ from: 'me', text: q[1] }, { from: 'bot', text: answer(q[0]) });
-        renderAssistant(); break;
+        if (q) sendAssistantMessage(q[1], q[0]);
+        break;
     }
   });
   document.addEventListener('input', function (ev) {
@@ -1393,6 +1442,13 @@
     if (k) { state.q[k] = ev.target.value; render(); }
   });
   document.addEventListener('change', function (ev) {
+    if (ev.target && ev.target.id === 'f-cat') {
+      var customCategoryWrap = document.getElementById('f-custom-category-wrap');
+      var customCategoryInput = document.getElementById('f-custom-category');
+      if (customCategoryWrap) customCategoryWrap.hidden = ev.target.value !== 'Other';
+      if (ev.target.value === 'Other' && customCategoryInput) customCategoryInput.focus();
+      return;
+    }
     if (ev.target && ev.target.dataset && ev.target.dataset.action === 'users-course') {
       state.filter.usersCourse = ev.target.value; render(); return;
     }
