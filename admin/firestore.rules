@@ -23,6 +23,49 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/accounts/$(request.auth.uid)).data.get('mustChangePassword', false) != true;
     }
 
+    function canCreateLoanNotification(accountId, notificationId) {
+      let data = request.resource.data;
+      let loanPath = /databases/$(database)/documents/loans/$(data.loanId);
+      let loan = get(loanPath).data;
+      return hasCompletedAccount()
+        && request.auth.uid == accountId
+        && data.keys().hasOnly([
+          'id', 'loanId', 'type', 'title', 'message', 'isRead', 'timestamp'
+        ])
+        && data.id == notificationId
+        && data.loanId is string
+        && data.type is string
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 100
+        && data.message is string
+        && data.message.size() > 0
+        && data.message.size() <= 300
+        && data.isRead == false
+        && data.timestamp == request.time
+        && exists(loanPath)
+        && loan.borrowerUid == request.auth.uid
+        && (
+          (data.type in ['approved', 'rejected']
+            && loan.status == data.type
+            && notificationId == data.loanId + '_' + data.type)
+          || (data.type == 'returned'
+            && loan.status == 'returned'
+            && notificationId == data.loanId + '_returned')
+          || (data.type == 'due_reminder'
+            && loan.status == 'approved'
+            && notificationId.matches(
+              '^' + data.loanId + '_due_[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+            ))
+          || (data.type == 'overdue'
+            && loan.status == 'approved'
+            && loan.end is string
+            && notificationId.matches(
+              '^' + data.loanId + '_overdue_[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+            ))
+        );
+    }
+
     match /equipment/{itemId} {
       allow read: if true;
       allow write: if isAdmin();
@@ -173,7 +216,9 @@ service cloud.firestore {
       match /notifications/{notificationId} {
         allow read: if isAdmin()
           || (hasActiveAccount() && request.auth.uid == accountId);
-        allow create, delete: if isAdmin();
+        allow create: if isAdmin()
+          || canCreateLoanNotification(accountId, notificationId);
+        allow delete: if isAdmin();
         allow update: if isAdmin()
           || (hasActiveAccount()
             && request.auth.uid == accountId

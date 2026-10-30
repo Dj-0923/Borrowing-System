@@ -35,7 +35,7 @@
       (error ? '<p class="text-sm t-bad text-center -mt-4 mb-6">' + esc(error) + '</p>' : '') +
       '<form id="signin-form" novalidate class="grid gap-7">' +
       '<div><label class="line-label text-sm" for="li-email">Email/Username</label>' +
-      '<input id="li-email" name="email" class="line-input text-base py-2" autocomplete="username" placeholder="you@lendy.edu"></div>' +
+      '<input id="li-email" name="email" class="line-input text-base py-2" autocomplete="username"></div>' +
       '<div><label class="line-label text-sm" for="li-pass">Password</label>' +
       '<div class="relative"><input id="li-pass" name="password" type="password" class="line-input text-base py-2 pr-9" autocomplete="current-password">' +
       '<button type="button" id="toggle-pass" class="absolute right-0 top-1/2 -translate-y-1/2 text-muted" aria-label="Show password">' + eyeIcon(false) + '</button></div></div>' +
