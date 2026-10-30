@@ -263,6 +263,19 @@ async function approveRequest(data) {
           idNumber: String(accountRequest.idNumber || "").trim(),
           college: String(accountRequest.college || accountRequest.course || "").trim(),
           course: String(accountRequest.course || accountRequest.college || "").trim(),
+          ...(typeof accountRequest.gender === "string"
+            ? { gender: accountRequest.gender }
+            : {}),
+          ...(accountRequest.role === "student"
+            ? {
+                ...(typeof accountRequest.yearLevel === "string"
+                  ? { yearLevel: accountRequest.yearLevel }
+                  : {}),
+                ...(typeof accountRequest.block === "string"
+                  ? { block: accountRequest.block }
+                  : {}),
+              }
+            : {}),
           status: "active",
           mustChangePassword: true,
           createdAt: account.exists ? account.data().createdAt || now : now,

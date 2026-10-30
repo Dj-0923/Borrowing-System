@@ -332,8 +332,10 @@
     return '<aside class="fixed inset-y-0 left-0 z-40 w-[266px] flex flex-col text-white transition-transform duration-200 ' +
       (state.sidebarOpen ? 'translate-x-0' : '-translate-x-full') + ' lg:translate-x-0" ' +
       'style="background:linear-gradient(180deg,var(--side-from),var(--side-to));padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)" aria-label="Main">' +
-      '<div class="px-9 pt-8 pb-9 flex items-center gap-3">' + logo() +
+      '<div class="px-6 pt-8 pb-6">' +
+      '<div class="px-3 flex items-center gap-3">' + logo() +
       '<span class="font-display font-bold text-[1.6rem] tracking-tight">Lendy</span></div>' +
+      '<div class="mt-6 border-b border-white/20"></div></div>' +
       '<nav class="px-5 flex flex-col gap-1.5">' +
       items.map(function (it) {
         return '<button data-action="nav" data-view="' + it[0] + '" class="nav-item" ' + (state.view === it[0] ? 'aria-current="page"' : '') + '>' +
@@ -583,11 +585,19 @@
             '<span class="truncate text-muted">' + esc(a.course || '\u2014') + '</span>' +
             '<span class="tnum">' + summary.itemsOut + '</span>' +
             '<span>' + pill(st) + '</span>' +
-            '<span class="flex items-center justify-end gap-2" data-stop-row>' +
+            '<span class="flex items-start md:items-center justify-end gap-2" data-stop-row>' +
+            '<span class="user-actions-desktop hidden md:flex items-center justify-end gap-2">' +
             '<button class="btn btn-ghost btn-sm" data-action="reset-user-password" data-id="' + a.id + '">' + icon('key', 'w-3.5 h-3.5') + 'Reset password</button>' +
             '<button class="btn ' + (disabled ? 'btn-ghost' : 'btn-danger') + ' btn-sm" data-action="' + (disabled ? 'restore-account' : 'revoke-account') + '" data-id="' + a.id + '">' + (disabled ? 'Enable account' : 'Disable account') + '</button>' +
             '<button class="btn btn-danger btn-sm" data-action="delete-user-account" data-id="' + a.id + '">' + icon('trash', 'w-3.5 h-3.5') + 'Delete</button>' +
-            '</span></div>';
+            '</span>' +
+            '<details class="user-actions-mobile md:hidden" data-stop-row data-action="user-actions-toggle">' +
+            '<summary aria-label="Actions for ' + esc(a.name) + '" title="Actions">\u22ee</summary>' +
+            '<div class="user-actions-menu">' +
+            '<button data-action="reset-user-password" data-id="' + a.id + '">' + icon('key', 'w-3.5 h-3.5') + 'Reset password</button>' +
+            '<button data-action="' + (disabled ? 'restore-account' : 'revoke-account') + '" data-id="' + a.id + '">' + (disabled ? 'Enable account' : 'Disable account') + '</button>' +
+            '<button class="user-actions-delete" data-action="delete-user-account" data-id="' + a.id + '">' + icon('trash', 'w-3.5 h-3.5') + 'Delete</button>' +
+            '</div></details></span></div>';
         }).join('') + '</div></div>';
     } else if (!accounts.length) {
       table = emptyState('users', 'No users yet', 'Once you approve an account request, that person shows up here.');
@@ -791,11 +801,22 @@
     if (state.view === 'dashboard') state.lastChartKey = chartKey;
     state.chartAnimation = animateChart;
     state.lastView = state.view;
+    activeUserActionsMenu = null;
     app.innerHTML =
       (state.sidebarOpen ? '<div data-action="toggle-sidebar" class="fixed inset-0 z-30 bg-black/40 lg:hidden"></div>' : '') +
       sidebar() +
       '<div class="lg:pl-[266px] min-h-full">' + mobileBar() +
       '<main class="' + (changed ? 'view-enter ' : '') + (animateChart ? 'chart-enter ' : '') + 'px-5 sm:px-8 lg:px-12 xl:px-16 pt-8 lg:pt-14 pb-28 max-w-[2000px]">' + VIEWS[state.view]() + '</main></div>';
+    app.querySelectorAll('.user-actions-mobile').forEach(function (menu) {
+      menu.addEventListener('toggle', function () {
+        if (menu.open) {
+          activeUserActionsMenu = menu;
+          positionUserActionsMenu();
+        } else if (activeUserActionsMenu === menu) {
+          activeUserActionsMenu = null;
+        }
+      });
+    });
     state.chartAnimation = false;
     if (keep) {
       var el = document.getElementById(keep.id);
@@ -803,6 +824,30 @@
     }
     if (changed) window.scrollTo(0, 0);
   }
+
+  var activeUserActionsMenu = null;
+  function positionUserActionsMenu() {
+    if (!activeUserActionsMenu || !activeUserActionsMenu.open) return;
+    var summary = activeUserActionsMenu.querySelector('summary');
+    var panel = activeUserActionsMenu.querySelector('.user-actions-menu');
+    if (!summary || !panel) return;
+    var anchor = summary.getBoundingClientRect();
+    var panelWidth = panel.offsetWidth;
+    var panelHeight = panel.offsetHeight;
+    var edge = 8;
+    var left = Math.max(edge, Math.min(
+      anchor.right - panelWidth,
+      window.innerWidth - panelWidth - edge
+    ));
+    var top = anchor.bottom + edge;
+    if (top + panelHeight > window.innerHeight - edge) {
+      top = Math.max(edge, anchor.top - panelHeight - edge);
+    }
+    panel.style.left = left + 'px';
+    panel.style.top = top + 'px';
+  }
+  window.addEventListener('resize', positionUserActionsMenu);
+  window.addEventListener('scroll', positionUserActionsMenu, true);
 
   /* ---------- toast ---------- */
   var toastTimer;
@@ -1410,13 +1455,11 @@
   function askAssistantApi(question, message) {
     var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
     if (!endpoint) {
-      message.text = 'The AI assistant service URL is not configured. Please contact the administrator.';
-      renderAssistant();
+      completeAssistantReply(message, 'The AI assistant service URL is not configured. Please contact the administrator.');
       return;
     }
     if (!auth.currentUser) {
-      message.text = 'Your admin sign-in has expired. Sign in again to ask a question.';
-      renderAssistant();
+      completeAssistantReply(message, 'Your admin sign-in has expired. Sign in again to ask a question.');
       return;
     }
     auth.currentUser.getIdToken()
@@ -1438,14 +1481,36 @@
         });
       })
       .then(function (answerText) {
-        message.text = answerText;
-        renderAssistant();
+        completeAssistantReply(message, answerText);
       })
       .catch(function (err) {
         console.error('Lendy assistant request failed.', err);
-        message.text = err.message || 'Could not reach the assistant. Please try again.';
-        renderAssistant();
+        completeAssistantReply(message, err.message || 'Could not reach the assistant. Please try again.');
       });
+  }
+  var assistantMinimumTypingDuration = 3000;
+  function startAssistantTyping(message) {
+    message.typing = true;
+    message.typingStartedAt = Date.now();
+    renderAssistant();
+  }
+  function completeAssistantReply(message, text) {
+    message.replyText = text;
+    message.replyReady = true;
+    finishAssistantReplyWhenReady(message);
+  }
+  function finishAssistantReplyWhenReady(message) {
+    if (!message.replyReady || !message.typing || message.completionScheduled) return;
+    message.completionScheduled = true;
+    var remaining = Math.max(
+      0,
+      assistantMinimumTypingDuration - (Date.now() - message.typingStartedAt)
+    );
+    window.setTimeout(function () {
+      message.text = message.replyText;
+      message.typing = false;
+      renderAssistant();
+    }, remaining);
   }
   function submitAssistant(form) {
     var input = document.getElementById('assistant-input');
@@ -1457,25 +1522,25 @@
     text = String(text || '').trim();
     if (!text) return;
     state.chat.push({ from: 'me', text: text });
+    var pendingMessage = { from: 'bot' };
+    state.chat.push(pendingMessage);
+    startAssistantTyping(pendingMessage);
+    renderAssistant();
     try {
       var localAnswer = key ? answer(key) : answerFreeText(text);
       var complexQuestion = /\b(and|also|plus|while|along with|as well as|both)\b/i.test(text);
       if (!key && (localAnswer === null || complexQuestion)) {
-        var pendingMessage = { from: 'bot', text: 'Checking the database…' };
-        state.chat.push(pendingMessage);
-        renderAssistant();
         askAssistantApi(text, pendingMessage);
         return;
       }
-      state.chat.push({ from: 'bot', text: localAnswer });
+      completeAssistantReply(pendingMessage, localAnswer);
     } catch (err) {
       console.error('Lendy assistant could not answer from the current data.', err);
-      state.chat.push({
-        from: 'bot',
-        text: 'I couldn\u2019t read the current equipment data to answer. Please check the dashboard data and try again.'
-      });
+      completeAssistantReply(
+        pendingMessage,
+        'I couldn\u2019t read the current equipment data to answer. Please check the dashboard data and try again.'
+      );
     }
-    renderAssistant();
   }
   function renderAssistant(animateOpen) {
     var root = $('#assistant-root');
@@ -1486,9 +1551,14 @@
         '<button data-action="assistant-toggle" class="w-7 h-7 rounded-md flex items-center justify-center hover:bg-white/15" aria-label="Close assistant">' + icon('x', 'w-4 h-4') + '</button></div>' +
         '<div id="chat-log" class="assistant-chat-log p-4 grid content-start gap-2.5 overflow-y-auto text-sm">' +
         state.chat.map(function (m) {
-          return m.from === 'me'
-            ? '<div class="justify-self-end max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-white" style="background:var(--btn-bg)">' + esc(m.text) + '</div>'
-            : '<div class="justify-self-start max-w-[90%] rounded-2xl rounded-bl-md px-3.5 py-2 bg-tint">' + esc(m.text) + '</div>';
+          if (m.from === 'me') {
+            return '<div class="justify-self-end max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-white" style="background:var(--btn-bg)">' + esc(m.text) + '</div>';
+          }
+          if (m.typing) {
+            return '<div class="assistant-typing justify-self-start rounded-2xl rounded-bl-md px-4 py-3 bg-tint" role="status" aria-label="Lendy is typing">' +
+              '<span></span><span></span><span></span></div>';
+          }
+          return '<div class="justify-self-start max-w-[90%] rounded-2xl rounded-bl-md px-3.5 py-2 bg-tint">' + esc(m.text) + '</div>';
         }).join('') + '</div>' +
         (state.chat.length === 1
           ? '<div class="px-4 pb-3 flex flex-wrap gap-2">' + ASK.map(function (a) { return '<button class="chip" data-action="assistant-ask" data-key="' + a[0] + '">' + a[1] + '</button>'; }).join('') + '</div>'
@@ -1515,7 +1585,10 @@
     var el = ev.target.closest('[data-action]');
     if (!el) return;
     var a = el.dataset.action, id = el.dataset.id;
+    var mobileActions = el.closest('.user-actions-mobile');
+    if (mobileActions && a !== 'user-actions-toggle') mobileActions.open = false;
     switch (a) {
+      case 'user-actions-toggle': break;
       case 'nav':
         state.view = el.dataset.view; state.sidebarOpen = false;
         if (state.view === 'history') { state.filter.history = el.dataset.filter || 'all'; state.q.history = ''; }

@@ -78,7 +78,7 @@ service cloud.firestore {
     match /accountRequests/{requestId} {
       allow create: if request.resource.data.keys().hasOnly([
             'id', 'authUid', 'name', 'email', 'role', 'idNumber', 'college',
-            'status', 'submittedAt', 'updatedAt'
+            'gender', 'yearLevel', 'block', 'status', 'submittedAt', 'updatedAt'
         ])
         && signedIn()
         && request.resource.data.id == requestId
@@ -92,6 +92,19 @@ service cloud.firestore {
         && request.resource.data.idNumber is string
         && request.resource.data.college is string
         && request.resource.data.role in ['student', 'faculty']
+        && request.resource.data.gender in ['Male', 'Female']
+        && (
+          (request.resource.data.role == 'student'
+            && request.resource.data.keys().hasAll(['yearLevel', 'block'])
+            && request.resource.data.yearLevel in [
+              '1st year', '2nd year', '3rd year', '4th year', '5th year'
+            ]
+            && request.resource.data.block in [
+              '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'
+            ])
+          || (request.resource.data.role == 'faculty'
+            && !request.resource.data.keys().hasAny(['yearLevel', 'block']))
+        )
         && request.resource.data.status == 'pending'
         && request.resource.data.submittedAt is int
         && request.resource.data.updatedAt is int;
