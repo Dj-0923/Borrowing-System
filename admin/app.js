@@ -22,6 +22,7 @@
   var DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   var DAY_LONG = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
   var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var MON_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   var CATEGORIES = { Computers: 'laptop', Cameras: 'camera', Tablets: 'tablet', Displays: 'projector', Robotics: 'cpu', Audio: 'headphones', Other: 'box' };
   var TAG_PREFIX = { Computers: 'LT', Cameras: 'CM', Tablets: 'TB', Displays: 'PJ', Robotics: 'RB', Audio: 'AU', Other: 'OT' };
 
@@ -1444,6 +1445,15 @@
       var joinedNames = names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
       return joinedNames + ' were tied for the busiest, with ' + plural(top, 'checkout') + ' each in the last 7 days.';
     }
+    if (key === 'busiest-month') {
+      var months = chartData('month');
+      var busiestCount = Math.max.apply(null, months.map(function (month) { return month.count; }));
+      if (!busiestCount) return 'There were no checkouts in the dashboard\u2019s last 12 months.';
+      var busiestMonths = months.filter(function (month) { return month.count === busiestCount; });
+      var monthNames = busiestMonths.map(function (month) { return month.sub; });
+      return monthNames.join(' and ') + (monthNames.length === 1 ? ' was' : ' were') +
+        ' busiest, with ' + plural(busiestCount, 'checkout') + ' each in the last 12 months.';
+    }
     return s.total + ' items: ' + s.available + ' available, ' + s.borrowed + ' borrowed, ' + s.maintenance + ' in maintenance. ' +
       s.pending + ' pending and ' + s.overdue + ' overdue.';
   }
@@ -1468,15 +1478,93 @@
         (email && question.indexOf(email) !== -1);
     }) || null;
   }
+  function dashboardCheckoutAnswer(text) {
+    var question = text.toLowerCase();
+    if (!/\b(?:how many|number of|count|total)\b/.test(question)) return null;
+
+    var monthMatch = MON_LONG.findIndex(function (month) {
+      return new RegExp('\\b' + month + '\\b', 'i').test(question);
+    });
+    var dayMatch = DAY_LONG.findIndex(function (day, index) {
+      return new RegExp('\\b(?:' + day + '|' + day.slice(0, -1) + '|' +
+        DAY[index] + ')\\b', 'i').test(question);
+    });
+    if (!/\b(?:checkouts?|borrow(?:ed|ing)?|loans?)\b/.test(question) &&
+        monthMatch === -1 && dayMatch === -1 &&
+        !/\b(?:day|daily|week|month|monthly)\b/.test(question)) return null;
+
+    var monthMode = monthMatch !== -1 ||
+      /\b(?:month|monthly|months)\b/.test(question);
+    if (monthMode) {
+      var months = chartData('month');
+      var requestedYear = question.match(/\b20\d{2}\b/);
+      if (/\b(?:this|current)\s+month\b/.test(question)) {
+        var currentMonth = months.find(function (month) { return month.isNow; });
+        return currentMonth.sub + ' had ' +
+          plural(currentMonth.count, 'checkout') + ' in the dashboard.';
+      }
+      if (/\b(?:last|previous|past)\s+month\b/.test(question)) {
+        var previousMonth = months[months.length - 2];
+        return previousMonth.sub + ' had ' +
+          plural(previousMonth.count, 'checkout') + ' in the dashboard.';
+      }
+      if (monthMatch !== -1) {
+        var monthName = MON_LONG[monthMatch];
+        var matchingMonths = months.filter(function (month) {
+          return month.label === MON[monthMatch] &&
+            (!requestedYear || month.sub.endsWith(requestedYear[0]));
+        });
+        if (!matchingMonths.length) {
+          return 'There are no checkouts for ' + monthName +
+            (requestedYear ? ' ' + requestedYear[0] : '') +
+            ' in the dashboard\u2019s last 12 months.';
+        }
+        var selectedMonth = matchingMonths[0];
+        return selectedMonth.sub + ' had ' +
+          plural(selectedMonth.count, 'checkout') + ' in the dashboard.';
+      }
+
+      if (/\b(?:each|every|per|all|monthly|by month)\b/.test(question)) {
+        return 'Dashboard checkouts by month (last 12 months): ' +
+          months.map(function (month) {
+            return month.sub + ': ' + month.count;
+          }).join('; ') + '.';
+      }
+      var monthTotal = months.reduce(function (sum, month) { return sum + month.count; }, 0);
+      return 'There were ' + plural(monthTotal, 'checkout') +
+        ' in the dashboard\u2019s last 12 months.';
+    }
+
+    var days = chartData('day');
+    if (dayMatch !== -1) {
+      var selectedDay = days.find(function (day) {
+        return DAY[dayMatch] === day.label;
+      });
+      return selectedDay.sub + ' (' + DAY_LONG[dayMatch] + ') had ' +
+        plural(selectedDay.count, 'checkout') + ' in the dashboard.';
+    }
+    if (/\b(?:each|every|per|daily|by day)\b/.test(question)) {
+      return 'Dashboard checkouts by day (last 7 days): ' +
+        days.map(function (day) {
+          return day.sub + ': ' + day.count;
+        }).join('; ') + '.';
+    }
+    var dayTotal = days.reduce(function (sum, day) { return sum + day.count; }, 0);
+    return 'There were ' + plural(dayTotal, 'checkout') +
+      ' in the dashboard\u2019s last 7 days.';
+  }
   function answerFreeText(text) {
     var t = text.toLowerCase();
     state.lastQuestion = text;
+    var periodAnswer = dashboardCheckoutAnswer(text);
+    if (periodAnswer !== null) return periodAnswer;
     var key = /\b(?:when|what date).*(?:account|created|made|join(?:ed)?|registered|signed up)|(?:account|created|made|join(?:ed)?|registered|signed up).*(?:when|date)/.test(t) ? 'account-created'
       : /\b(?:who|list|show|what are).*(?:users?|accounts?|members?|students?|faculty|names?)\b|\b(?:account|user|member)\s+names?\b/.test(t) ? 'accounts'
       : /(?:how many|number of|count of).*(?:people|users|borrowers?|borrowing|borrow)|who(?:'s| is) borrowing/.test(t) ? 'borrowers'
       : /overdue|late/.test(t) ? 'overdue'
       : /available|free|open/.test(t) ? 'available'
       : /pending|waiting|queue|request/.test(t) ? 'pending'
+      : /busiest|busy|popular|peak/.test(t) && /\bmonths?\b/.test(t) ? 'busiest-month'
       : /busiest|busy|popular|peak/.test(t) ? 'busiest'
       : /summary|overview|status|how.*(going|things)/.test(t) ? 'summary'
       : null;
@@ -1576,7 +1664,7 @@
     var root = $('#assistant-root');
     var panel = '';
     if (state.assistantOpen) {
-      panel = '<div class="' + (animateOpen ? 'pop ' : '') + 'assistant-panel fixed right-4 sm:right-5 z-40 w-[calc(100vw-2rem)] max-w-sm rounded-2xl bg-card border border-line shadow-2xl flex flex-col overflow-hidden" style="bottom:calc(5.75rem + env(safe-area-inset-bottom,0px))" role="dialog" aria-label="Lendy assistant">' +
+      panel = '<div class="' + (animateOpen ? 'pop ' : '') + 'assistant-panel fixed right-4 sm:right-5 z-40 rounded-2xl bg-card border border-line shadow-2xl flex flex-col overflow-hidden" style="bottom:calc(5.75rem + env(safe-area-inset-bottom,0px))" role="dialog" aria-label="Lendy assistant">' +
         '<div class="flex items-center justify-between px-4 py-3 text-white" style="background:linear-gradient(90deg,var(--side-from),var(--side-to))"><span class="font-display font-bold">Ask Lendy</span>' +
         '<button data-action="assistant-toggle" class="w-7 h-7 rounded-md flex items-center justify-center hover:bg-white/15" aria-label="Close assistant">' + icon('x', 'w-4 h-4') + '</button></div>' +
         '<div id="chat-log" class="assistant-chat-log p-4 grid content-start gap-2.5 overflow-y-auto text-sm">' +
