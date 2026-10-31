@@ -171,6 +171,17 @@
   /* Prefer the account link on mobile loans; keep name matching for older
      admin-created loans that predate borrowerUid. */
   var normName = function (s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); };
+  function equipmentCategories() {
+    var seen = Object.create(null);
+    return Object.keys(CATEGORIES).concat(db.equipment.map(function (item) {
+      return String(item.category || '').trim();
+    })).filter(function (category) {
+      var key = normName(category);
+      if (!key || key === 'other' || seen[key]) return false;
+      seen[key] = true;
+      return true;
+    }).concat(['Other']);
+  }
   function loansFor(account) {
     var n = normName(account.name);
     return db.loans.filter(function (l) {
@@ -585,13 +596,13 @@
             '<span class="truncate text-muted">' + esc(a.course || '\u2014') + '</span>' +
             '<span class="tnum">' + summary.itemsOut + '</span>' +
             '<span>' + pill(st) + '</span>' +
-            '<span class="flex items-start md:items-center justify-end gap-2" data-stop-row>' +
-            '<span class="user-actions-desktop hidden md:flex items-center justify-end gap-2">' +
+            '<span class="flex items-start lg:items-center justify-end gap-2" data-stop-row>' +
+            '<span class="user-actions-desktop hidden lg:flex items-center justify-end gap-2">' +
             '<button class="btn btn-ghost btn-sm" data-action="reset-user-password" data-id="' + a.id + '">' + icon('key', 'w-3.5 h-3.5') + 'Reset password</button>' +
             '<button class="btn ' + (disabled ? 'btn-ghost' : 'btn-danger') + ' btn-sm" data-action="' + (disabled ? 'restore-account' : 'revoke-account') + '" data-id="' + a.id + '">' + (disabled ? 'Enable account' : 'Disable account') + '</button>' +
             '<button class="btn btn-danger btn-sm" data-action="delete-user-account" data-id="' + a.id + '">' + icon('trash', 'w-3.5 h-3.5') + 'Delete</button>' +
             '</span>' +
-            '<details class="user-actions-mobile md:hidden" data-stop-row data-action="user-actions-toggle">' +
+            '<details class="user-actions-mobile lg:hidden" data-stop-row data-action="user-actions-toggle">' +
             '<summary aria-label="Actions for ' + esc(a.name) + '" title="Actions">\u22ee</summary>' +
             '<div class="user-actions-menu">' +
             '<button data-action="reset-user-password" data-id="' + a.id + '">' + icon('key', 'w-3.5 h-3.5') + 'Reset password</button>' +
@@ -653,18 +664,24 @@
         rows.map(function (e) {
           var st = itemStatus(e), al = activeLoanFor(e.id), sub = '';
           if (al) sub = '<p class="mt-1 text-[11px] ' + (loanStatus(al) === 'overdue' ? 't-bad font-semibold' : 'text-muted') + '">' + esc(borrowerName(al)) + ' · due ' + fmt(al.end) + '</p>';
+          var editBtn = '<button class="btn btn-ghost btn-sm" data-action="edit-equipment" data-id="' + e.id + '">' + icon('pencil', 'w-3.5 h-3.5') + 'Edit</button>';
           var acts, qrBtn = '<button class="btn btn-ghost btn-sm" data-action="qr" data-id="' + e.id + '" aria-label="Print QR label for ' + esc(e.name) + '">' + icon('qr', 'w-3.5 h-3.5') + '</button>';
-          if (st === 'borrowed') acts = '<button class="btn btn-ghost btn-sm" data-action="return" data-id="' + al.id + '">' + icon('undo', 'w-3.5 h-3.5') + 'Mark returned</button>' + qrBtn;
+          if (st === 'borrowed') acts = '<button class="btn btn-ghost btn-sm" data-action="return" data-id="' + al.id + '">' + icon('undo', 'w-3.5 h-3.5') + 'Mark returned</button>' +
+            editBtn + qrBtn;
           else if (st === 'available') acts = '<button class="btn btn-ghost btn-sm" data-action="maintenance-on" data-id="' + e.id + '">' + icon('wrench', 'w-3.5 h-3.5') + 'Maintenance</button>' +
-            qrBtn + '<button class="btn btn-ghost btn-sm" data-action="delete-item" data-id="' + e.id + '" aria-label="Remove ' + esc(e.name) + '">' + icon('trash', 'w-3.5 h-3.5') + '</button>';
-          else acts = '<button class="btn btn-ghost btn-sm" data-action="edit-equipment" data-id="' + e.id + '">' + icon('pencil', 'w-3.5 h-3.5') + 'Edit</button>' +
+            editBtn + qrBtn + '<button class="btn btn-ghost btn-sm" data-action="delete-item" data-id="' + e.id + '" aria-label="Remove ' + esc(e.name) + '">' + icon('trash', 'w-3.5 h-3.5') + '</button>';
+          else acts = editBtn +
             '<button class="btn btn-ghost btn-sm" data-action="maintenance-off" data-id="' + e.id + '">Back in service</button>' +
             qrBtn + '<button class="btn btn-ghost btn-sm" data-action="delete-item" data-id="' + e.id + '" aria-label="Remove ' + esc(e.name) + '">' + icon('trash', 'w-3.5 h-3.5') + '</button>';
           return '<div class="grid ' + C + ' gap-3 px-4 py-3 items-center text-[13px] border-t border-line">' +
             '<span class="flex items-center gap-3 min-w-0">' + mediaTile(e, 'w-9 h-9') + '<span class="min-w-0"><span class="block font-medium truncate">' + esc(e.name) + '</span><span class="block text-[11px] text-muted">' + esc(e.tag) + '</span></span></span>' +
             '<span class="text-muted">' + esc(e.category) + '</span>' +
             '<span><span>' + pill(st) + '</span>' + sub + '</span>' +
-            '<span class="flex flex-wrap items-center justify-end gap-2">' + acts + '</span></div>';
+            '<span class="flex items-center justify-end gap-2">' +
+            '<span class="hidden xl:flex items-center justify-end gap-2">' + acts + '</span>' +
+            '<details class="user-actions-mobile xl:hidden" data-stop-row data-action="user-actions-toggle">' +
+            '<summary aria-label="Actions for ' + esc(e.name) + '" title="Actions">\u22ee</summary>' +
+            '<div class="user-actions-menu">' + acts + '</div></details></span></div>';
         }).join('') + '</div></div>';
     } else if (!all.length) {
       table = emptyState('archive', 'Your inventory is empty', 'Add the equipment people can borrow. Everything on the dashboard updates as you go.',
@@ -1065,19 +1082,24 @@
   }
   function addForm(item) {
     var editing = !!item;
-    var knownCategory = Object.prototype.hasOwnProperty.call(CATEGORIES, item && item.category) && item.category !== 'Other';
-    var selectedCategory = editing ? (knownCategory ? item.category : 'Other') : 'Computers';
+    var categories = equipmentCategories();
+    var itemCategory = String(item && item.category || '').trim();
+    var matchingCategory = categories.find(function (category) {
+      return normName(category) === normName(itemCategory);
+    });
+    var knownCategory = !!matchingCategory && matchingCategory !== 'Other';
+    var selectedCategory = editing ? (knownCategory ? matchingCategory : 'Other') : 'Computers';
     var imagePreview = item && item.image
       ? '<img src="' + esc(item.image) + '" class="w-full h-full object-cover" alt="">'
       : icon('box', 'w-6 h-6');
     return modalHead(editing ? 'Edit equipment details' : 'Add equipment',
-      editing ? 'Update the equipment information. Its maintenance status will not change.' : 'New items start as available.') +
+      editing ? 'Update the equipment information. Its current status will not change.' : 'New items start as available.') +
       '<form data-form="' + (editing ? 'edit-equipment' : 'add') + '"' + (editing ? ' data-id="' + esc(item.id) + '"' : '') + ' novalidate class="mt-5 grid gap-4">' +
       '<div><label class="lbl" for="f-name">Name</label><input id="f-name" name="name" class="field" placeholder="e.g. Sony A7 Camera" maxlength="60" autocomplete="off" value="' + esc(editing ? item.name : '') + '"></div>' +
       '<div><label class="lbl" for="f-location">Location</label><input id="f-location" name="location" class="field" placeholder="e.g. AV Storage, Room 101" maxlength="80" autocomplete="off" value="' + esc(editing ? item.location : '') + '"></div>' +
       '<div class="grid grid-cols-2 gap-3">' +
       '<div><label class="lbl" for="f-cat">Category</label><select id="f-cat" name="category" class="field">' +
-      Object.keys(CATEGORIES).map(function (c) { return '<option' + (c === selectedCategory ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select>' +
+      categories.map(function (category) { return '<option' + (category === selectedCategory ? ' selected' : '') + '>' + esc(category) + '</option>'; }).join('') + '</select>' +
       '<div id="f-custom-category-wrap" class="mt-3"' + (selectedCategory === 'Other' ? '' : ' hidden') + '><label class="lbl" for="f-custom-category">' + (editing ? 'Category name' : 'New category') + '</label>' +
       '<input id="f-custom-category" name="customCategory" class="field" placeholder="Enter category name" maxlength="40" autocomplete="off" value="' + esc(editing && !knownCategory ? item.category : '') + '"></div></div>' +
       '<div><label class="lbl" for="f-tag">Asset tag <span class="font-normal">(optional)</span></label><input id="f-tag" name="tag" class="field" placeholder="Auto-generated" maxlength="16" autocomplete="off" value="' + esc(editing ? item.tag : '') + '"></div></div>' +
@@ -1172,9 +1194,9 @@
       '<div class="mt-6 flex justify-end"><button class="btn btn-ghost" data-action="close-modal">Close</button></div>';
     var s = userSummary(a);
     var recent = s.loans.slice(0, 3);
-    var statCard = function (n, label, bad) {
+    var statCard = function (n, label, tone) {
       return '<div class="rounded-xl border border-line p-3">' +
-        '<span class="block font-display font-bold text-2xl leading-none ' + (bad ? 't-bad' : 'text-brand-deep') + '">' + n + '</span>' +
+        '<span class="block font-display font-bold text-2xl leading-none" style="color:var(--' + tone + ')">' + n + '</span>' +
         '<span class="block mt-1.5 text-xs text-muted">' + label + '</span></div>';
     };
     var detailRow = function (label, value) {
@@ -1205,8 +1227,8 @@
         : '<p class="text-sm text-muted mt-2">No borrowing activity yet.</p>') +
       '<p class="text-xs font-bold uppercase tracking-wide text-muted mt-5">Borrowing summary</p>' +
       '<div class="mt-2 grid grid-cols-2 gap-3">' +
-      statCard(s.totalBorrowed, 'Total borrowings') + statCard(s.dueSoon, 'Due soon', s.dueSoon > 0) +
-      statCard(s.returned, 'Returned') + statCard(s.currentBorrowed, 'Borrowed now') +
+      statCard(s.totalBorrowed, 'Total borrowings', 'ink') + statCard(s.dueSoon, 'Due soon', 'bad-fg') +
+      statCard(s.returned, 'Returned', 'ok-fg') + statCard(s.currentBorrowed, 'Borrowed now', 'warn-fg') +
       '</div></div>';
   }
   function renderModal() {
@@ -1301,9 +1323,9 @@
 
   function submitEditEquipment(form) {
     var item = eqById(form.dataset.id);
-    if (!item || !item.maintenance) {
+    if (!item) {
       closeModal();
-      toast('This equipment is no longer in maintenance.', 'bad');
+      toast('This equipment is no longer in the inventory.', 'bad');
       return;
     }
     var f = new FormData(form);
@@ -1409,10 +1431,18 @@
       return account.name + '\u2019s account record ' + accountCreatedDate(account) + '.';
     }
     if (key === 'busiest') {
-      var by = [0, 0, 0, 0, 0, 0, 0];
-      db.loans.filter(isCheckout).forEach(function (l) { by[parse(l.start).getDay()]++; });
-      var top = Math.max.apply(null, by);
-      return top ? DAY_LONG[by.indexOf(top)] + ' are busiest, with ' + plural(top, 'checkout') + ' on record.' : 'There are no checkouts on record yet.';
+      var days = chartData('day');
+      var top = Math.max.apply(null, days.map(function (day) { return day.count; }));
+      if (!top) return 'There were no checkouts in the last 7 days.';
+      var busiest = days.filter(function (day) { return day.count === top; });
+      var names = busiest.map(function (day) {
+        return DAY_LONG[DAY.indexOf(day.label)].replace(/s$/, '');
+      });
+      if (names.length === 1) {
+        return names[0] + ' was the busiest day, with ' + plural(top, 'checkout') + ' in the last 7 days.';
+      }
+      var joinedNames = names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+      return joinedNames + ' were tied for the busiest, with ' + plural(top, 'checkout') + ' each in the last 7 days.';
     }
     return s.total + ' items: ' + s.available + ' available, ' + s.borrowed + ' borrowed, ' + s.maintenance + ' in maintenance. ' +
       s.pending + ' pending and ' + s.overdue + ' overdue.';
@@ -1634,7 +1664,7 @@
       case 'maintenance-off': setMaintenance(id, false); break;
       case 'edit-equipment':
         var equipment = eqById(id);
-        if (equipment && equipment.maintenance) openModal({ type: 'edit-equipment', id: id });
+        if (equipment) openModal({ type: 'edit-equipment', id: id });
         break;
       case 'delete-item':
         var e = eqById(id); if (!e) break;

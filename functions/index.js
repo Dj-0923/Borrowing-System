@@ -111,7 +111,22 @@ exports.notifyLoanStatus = onDocumentUpdated(
   async (event) => {
     const before = event.data?.before.data();
     const after = event.data?.after.data();
-    if (!before || !after || before.status !== 'pending') return;
+    if (!before || !after) return;
+
+    if (before.status === 'approved' && after.status === 'returned') {
+      await notifyBorrower({
+        borrowerUid: after.borrowerUid,
+        notificationId: `${event.params.loanId}_returned`,
+        title: 'Item return confirmed',
+        message: `${itemTitle(after)} has been marked as returned. Thank you.`,
+        type: 'returned',
+        loanId: event.params.loanId,
+        preferenceKey: 'returnRemindersEnabled',
+      });
+      return;
+    }
+
+    if (before.status !== 'pending') return;
     if (after.status !== 'approved' && after.status !== 'rejected') return;
 
     const title =
