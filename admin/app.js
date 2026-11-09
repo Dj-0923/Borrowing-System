@@ -1087,9 +1087,9 @@
       .then(function (result) {
         closeModal();
         if (result.ambiguousLegacyLoans) {
-          toast('Deleted ' + a.name + '\u2019s account. ' + result.ambiguousLegacyLoans + ' unlinked legacy loan(s) were kept because the borrower name is shared.');
+          toast('Deleted ' + a.name + '\u2019s account and linked data. ' + result.ambiguousLegacyLoans + ' unlinked legacy loan(s) were kept because the borrower name is shared.');
         } else {
-          toast('Deleted ' + a.name + '\u2019s account and ' + result.deletedLoans + ' loan record(s).');
+          toast('Deleted ' + a.name + '\u2019s account, sign-in, and linked Firestore data (' + result.deletedLoans + ' loan(s), ' + result.deletedNotifications + ' notification(s), ' + result.deletedDevices + ' device record(s)).');
         }
       })
       .catch(fail('Could not delete the account'));

@@ -307,13 +307,31 @@ function requestLockId(email) {
 }
 
 async function deleteRequestCredentials(requestRef) {
-  const credentials = await requestRef.collection("privateCredentials").get();
-  for (let offset = 0; offset < credentials.docs.length; offset += 400) {
+  let deletedCount = 0;
+  while (true) {
+    const credentials = await requestRef
+      .collection("privateCredentials")
+      .limit(400)
+      .get();
+    if (credentials.empty) return deletedCount;
+
     const batch = db.batch();
-    credentials.docs.slice(offset, offset + 400).forEach((credential) => {
-      batch.delete(credential.ref);
-    });
+    credentials.docs.forEach((credential) => batch.delete(credential.ref));
     await batch.commit();
+    deletedCount += credentials.size;
+  }
+}
+
+async function deleteSubcollectionDocuments(documentRef, collectionName) {
+  let deletedCount = 0;
+  while (true) {
+    const snapshot = await documentRef.collection(collectionName).limit(400).get();
+    if (snapshot.empty) return deletedCount;
+
+    const batch = db.batch();
+    snapshot.docs.forEach((document) => batch.delete(document.ref));
+    await batch.commit();
+    deletedCount += snapshot.size;
   }
 }
 
@@ -887,10 +905,14 @@ async function deleteAccount(data, adminUid) {
   }
 
   const accountRequests = db.collection("accountRequests");
+  const accountEmail = normalizedEmail(account.email);
   const linkedQueries = await Promise.all([
     db.collection("loans").where("borrowerUid", "==", accountId).get(),
     accountRequests.where("authUid", "==", accountId).get(),
     accountRequests.where("accountId", "==", accountId).get(),
+    isValidEmail(accountEmail)
+      ? accountRequests.where("email", "==", accountEmail).get()
+      : Promise.resolve({ docs: [] }),
   ]);
 
   let unlinkedLegacyLoans = [];
@@ -922,11 +944,14 @@ async function deleteAccount(data, adminUid) {
     loanReferences.set(document.ref.path, document.ref);
   }
   const requestReferences = new Map();
+  const requestEmails = new Map();
   for (const document of [
     ...linkedQueries[1].docs,
     ...linkedQueries[2].docs,
+    ...linkedQueries[3].docs,
   ]) {
     requestReferences.set(document.ref.path, document.ref);
+    requestEmails.set(document.id, normalizedEmail(document.data().email));
   }
 
   async function deleteDocuments(references) {
@@ -941,8 +966,15 @@ async function deleteAccount(data, adminUid) {
     return documents.length;
   }
 
-  const deletedLoans = await deleteDocuments(loanReferences);
-  const deletedRequests = await deleteDocuments(requestReferences);
+  try {
+    await accountRef.update({ status: "revoked" });
+  } catch (error) {
+    console.error("Could not disable the account before deletion.", {
+      accountId,
+      error: error.message,
+    });
+    throw new HttpError(500, "Could not disable the account before deletion.");
+  }
 
   if (authAccountExists) {
     try {
@@ -954,9 +986,40 @@ async function deleteAccount(data, adminUid) {
       });
       throw new HttpError(
         502,
-        "The linked records were deleted, but Firebase Authentication could not delete the sign-in account. Retry the delete action.",
+        "Could not delete the Firebase Authentication account. The Firestore account was disabled; retry the delete action.",
       );
     }
+  }
+
+  let deletedNotifications;
+  let deletedDevices;
+  let deletedLoans;
+  let deletedRequests;
+  try {
+    for (const requestRef of requestReferences.values()) {
+      await deleteRequestCredentials(requestRef);
+    }
+    deletedNotifications = await deleteSubcollectionDocuments(
+      accountRef,
+      "notifications",
+    );
+    deletedDevices = await deleteSubcollectionDocuments(accountRef, "devices");
+    deletedLoans = await deleteDocuments(loanReferences);
+    deletedRequests = await deleteDocuments(requestReferences);
+    for (const [requestId, requestEmail] of requestEmails) {
+      if (isValidEmail(requestEmail)) {
+        await releaseRequestEmailLock(requestEmail, requestId);
+      }
+    }
+  } catch (error) {
+    console.error("Could not completely remove the account's Firestore data.", {
+      accountId,
+      error: error.message,
+    });
+    throw new HttpError(
+      500,
+      "The sign-in account was deleted, but some Firestore records could not be removed. Retry the delete action.",
+    );
   }
 
   try {
@@ -975,7 +1038,9 @@ async function deleteAccount(data, adminUid) {
   return {
     success: true,
     deletedLoans,
-    deletedRequests: requestReferences.size,
+    deletedRequests,
+    deletedNotifications,
+    deletedDevices,
     authAccountDeleted: authAccountExists,
     ambiguousLegacyLoans,
   };
