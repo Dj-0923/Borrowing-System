@@ -120,6 +120,12 @@ existing deployment to use a new version, or create a new deployment, then
 update `GMAIL_APPS_SCRIPT_URL` in Render if the URL changed. Check the Apps
 Script **Executions** page for authorization or Gmail quota errors.
 
+To authorize Gmail sending explicitly, select `authorizeGmailSender` in the
+Apps Script editor's function dropdown and click **Run**. Approve the Gmail
+permission prompt. A successful execution logs the remaining daily recipient
+quota. Then update the web app deployment to the latest code version and
+redeploy Render.
+
 The admin assistant uses Gemini only to turn an admin's question into a
 restricted set of supported database queries. The service verifies the admin,
 reads the relevant Firestore collections, and formats the answer itself; it

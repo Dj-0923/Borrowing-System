@@ -285,7 +285,12 @@ async function sendEmailWithGmailScript({
       status: response.status,
       error: typeof result.error === "string" ? result.error : "Unknown sender error.",
     });
-    throw new HttpError(502, "Gmail could not send the temporary password email.");
+    throw new HttpError(
+      502,
+      typeof result.error === "string"
+        ? result.error
+        : "Gmail could not send the temporary password email.",
+    );
   }
 }
 

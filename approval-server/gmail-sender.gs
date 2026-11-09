@@ -51,11 +51,26 @@ function doPost(event) {
     return jsonResponse({ success: true });
   } catch (error) {
     console.error("GmailApp could not send the approval email.", error);
+    var errorMessage = String(error && error.message ? error.message : error);
+    var userMessage = "Gmail send failed. Open Apps Script Executions for details.";
+    if (/quota|too many times/i.test(errorMessage)) {
+      userMessage = "The Gmail account reached its daily sending quota. Try again after the quota resets.";
+    } else if (/permission|authorization|authoriz|not allowed/i.test(errorMessage)) {
+      userMessage = "Gmail permission is missing. Run authorizeGmailSender in the Apps Script editor, then redeploy.";
+    }
     return jsonResponse({
       success: false,
-      error: "Gmail send failed. Check authorization and daily sending quota.",
+      error: userMessage,
     });
   }
+}
+
+function authorizeGmailSender() {
+  var remainingQuota = GmailApp.getRemainingDailyQuota();
+  console.log(
+    "Gmail sender authorization is active. Remaining recipient quota: " +
+      remainingQuota,
+  );
 }
 
 function jsonResponse(data) {
