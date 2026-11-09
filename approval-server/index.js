@@ -90,6 +90,10 @@ function sendJson(response, status, body, origin) {
   response.end(JSON.stringify(body));
 }
 
+function isLocalDevelopmentOrigin(origin) {
+  return /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/.test(origin);
+}
+
 async function serveAdminFile(request, response) {
   if (request.method !== "GET" && request.method !== "HEAD") return false;
 
@@ -1381,9 +1385,14 @@ const server = http.createServer(async (request, response) => {
     "/request-account",
     "/account-request-status",
   ]);
-  const isPublicAppRoute =
-    request.method === "POST" && publicAppRoutes.has(request.url);
-  if ((origin && !allowedOrigins.has(origin)) || (!origin && !isPublicAppRoute)) {
+  const isPublicAppRoute = publicAppRoutes.has(request.url);
+  const isLocalPublicAppOrigin =
+    isPublicAppRoute && origin && isLocalDevelopmentOrigin(origin);
+  const isPublicAppPost = request.method === "POST" && isPublicAppRoute;
+  if (
+    (origin && !allowedOrigins.has(origin) && !isLocalPublicAppOrigin) ||
+    (!origin && !isPublicAppPost)
+  ) {
     response.writeHead(403, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ error: "Origin is not allowed." }));
     return;

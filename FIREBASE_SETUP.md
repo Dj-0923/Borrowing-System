@@ -67,7 +67,9 @@ The repository includes a Render Blueprint in `render.yaml`.
    `https://borrowing-system-lendy.firebaseapp.com` are allowed automatically.
    Add any custom dashboard domain or local web-server origin (e.g.
    `http://localhost:5500`) to `ALLOWED_ORIGINS`, comma-separated. Use exact
-   origins with no trailing slash; do not use a `file://` URL.
+   origins with no trailing slash; do not use a `file://` URL. For Flutter web
+   development, localhost and loopback origins are also allowed automatically
+   for the public account-request and request-status endpoints only.
 6. Wait for deployment and copy the service's public HTTPS URL. Open
    `https://YOUR-SERVICE.onrender.com/health`; it should return
    `{"status":"ok"}`.
