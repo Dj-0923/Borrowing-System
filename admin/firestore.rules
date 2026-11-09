@@ -119,38 +119,7 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
     match /accountRequests/{requestId} {
-      allow create: if request.resource.data.keys().hasOnly([
-            'id', 'authUid', 'name', 'email', 'role', 'idNumber', 'college',
-            'gender', 'yearLevel', 'block', 'status', 'submittedAt', 'updatedAt'
-        ])
-        && signedIn()
-        && request.resource.data.id == requestId
-        && request.resource.data.authUid == request.auth.uid
-        && request.resource.data.authUid is string
-        && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.email is string
-        && request.resource.data.email.size() > 3
-        && request.resource.data.email == request.auth.token.email
-        && request.resource.data.idNumber is string
-        && request.resource.data.college is string
-        && request.resource.data.role in ['student', 'faculty']
-        && request.resource.data.gender in ['Male', 'Female']
-        && (
-          (request.resource.data.role == 'student'
-            && request.resource.data.keys().hasAll(['yearLevel', 'block'])
-            && request.resource.data.yearLevel in [
-              '1st year', '2nd year', '3rd year', '4th year', '5th year'
-            ]
-            && request.resource.data.block in [
-              '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'
-            ])
-          || (request.resource.data.role == 'faculty'
-            && !request.resource.data.keys().hasAny(['yearLevel', 'block']))
-        )
-        && request.resource.data.status == 'pending'
-        && request.resource.data.submittedAt is int
-        && request.resource.data.updatedAt is int;
+      allow create: if isAdmin();
       allow read: if isAdmin()
         || (signedIn() && resource.data.authUid == request.auth.uid);
       allow update: if isAdmin()

@@ -1,7 +1,7 @@
 const { initializeApp, cert } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
-const { randomBytes } = require("node:crypto");
+const { createHash, randomBytes, timingSafeEqual } = require("node:crypto");
 const http = require("node:http");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -68,21 +68,25 @@ const db = getFirestore();
 let emailTransporter;
 
 class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
 function sendJson(response, status, body, origin) {
-  response.writeHead(status, {
-    "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Origin": origin,
+  const headers = {
     "Cache-Control": "no-store",
     "Content-Type": "application/json; charset=utf-8",
-    "Vary": "Origin",
-  });
+  };
+  if (origin) {
+    headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
+    headers["Access-Control-Allow-Methods"] = "POST, OPTIONS";
+    headers["Access-Control-Allow-Origin"] = origin;
+    headers.Vary = "Origin";
+  }
+  response.writeHead(status, headers);
   response.end(JSON.stringify(body));
 }
 
@@ -188,64 +192,238 @@ function getEmailTransporter() {
   return { email, transporter: emailTransporter };
 }
 
-async function sendTemporaryPassword(accountRequest, requestId) {
-  const email = String(accountRequest.email || "").trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new HttpError(409, "The account request has an invalid email.");
+function normalizedEmail(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function requestLockId(email) {
+  return createHash("sha256").update(email).digest("hex");
+}
+
+async function deleteRequestCredentials(requestRef) {
+  const credentials = await requestRef.collection("privateCredentials").get();
+  for (let offset = 0; offset < credentials.docs.length; offset += 400) {
+    const batch = db.batch();
+    credentials.docs.slice(offset, offset + 400).forEach((credential) => {
+      batch.delete(credential.ref);
+    });
+    await batch.commit();
+  }
+}
+
+async function releaseRequestEmailLock(email, requestId) {
+  const lockRef = db.collection("accountRequestEmailLocks").doc(requestLockId(email));
+  const lock = await lockRef.get();
+  if (lock.exists && lock.data().requestId === requestId) {
+    await lockRef.delete();
+  }
+}
+
+async function createAccountRequest(data) {
+  const email = normalizedEmail(data && data.email);
+  const name = typeof (data && data.fullName) === "string"
+    ? data.fullName.trim()
+    : "";
+  const role = data && data.role;
+  const idNumber = typeof (data && data.idNumber) === "string"
+    ? data.idNumber.trim()
+    : "";
+  const college = typeof (data && data.college) === "string"
+    ? data.college.trim()
+    : "";
+  const gender = data && data.gender;
+  const yearLevel = data && data.yearLevel;
+  const block = data && data.block;
+
+  if (!isValidEmail(email)) {
+    throw new HttpError(400, "Enter a valid email address.", "invalid-email");
+  }
+  if (!name || name.length > 120 || !idNumber || idNumber.length > 80) {
+    throw new HttpError(400, "Enter a valid name and ID number.", "invalid-details");
+  }
+  if (!["student", "faculty"].includes(role) || !college || college.length > 160) {
+    throw new HttpError(400, "Choose a valid role and college.", "invalid-details");
+  }
+  if (!["Male", "Female"].includes(gender)) {
+    throw new HttpError(400, "Choose a valid gender.", "invalid-details");
   }
   if (
-    typeof accountRequest.authUid !== "string" ||
-    accountRequest.authUid.length === 0
+    role === "student" &&
+    (!["1st year", "2nd year", "3rd year", "4th year", "5th year"].includes(yearLevel) ||
+      !["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"].includes(block))
   ) {
-    throw new HttpError(409, "The request has no linked sign-in account.");
+    throw new HttpError(400, "Choose a valid year level and block.", "invalid-details");
   }
-  const { email: sender, transporter } = getEmailTransporter();
-  const temporaryPassword = randomBytes(18).toString("base64url");
-  let user;
+
+  const accounts = db.collection("accounts");
+  const accountRequests = db.collection("accountRequests");
+  const [matchingAccounts, matchingRequests] = await Promise.all([
+    accounts.where("email", "==", email).limit(2).get(),
+    accountRequests.where("email", "==", email).get(),
+  ]);
+  if (!matchingAccounts.empty) {
+    throw new HttpError(409, "This email already belongs to an account.", "email-already-in-use");
+  }
+  if (matchingRequests.docs.some((request) => request.data().status !== "rejected")) {
+    throw new HttpError(
+      409,
+      "There is already a request waiting for this email.",
+      "request-already-pending",
+    );
+  }
+
+  for (const oldRequest of matchingRequests.docs) {
+    await deleteRequestCredentials(oldRequest.ref);
+    await oldRequest.ref.delete();
+    await releaseRequestEmailLock(email, oldRequest.id);
+  }
+
   try {
-    user = await auth.getUser(accountRequest.authUid);
-    if (user.email?.toLowerCase() !== email) {
-      throw new HttpError(
-        409,
-        "The request email does not match its Firebase Authentication account.",
-      );
+    const existingUser = await auth.getUserByEmail(email);
+    const [existingAccount, adminRecord] = await Promise.all([
+      accounts.doc(existingUser.uid).get(),
+      db.collection("admins").doc(existingUser.uid).get(),
+    ]);
+    if (
+      existingAccount.exists ||
+      (adminRecord.exists && adminRecord.data().role === "admin")
+    ) {
+      throw new HttpError(409, "This email already belongs to an account.", "email-already-in-use");
     }
-    await auth.updateUser(user.uid, { password: temporaryPassword });
-    await db
-      .collection("accountRequests")
-      .doc(requestId)
-      .collection("privateCredentials")
-      .doc("temporary")
-      .set({
-        temporaryPassword,
-        createdAt: Date.now(),
+    await auth.deleteUser(existingUser.uid);
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    if (error.code !== "auth/user-not-found") {
+      console.error("Could not clear an old orphaned sign-in account.", {
+        email,
+        error: error.message,
       });
-    await transporter.sendMail({
-      from: `Lendy <${sender}>`,
-      to: email,
-      subject: "Your Lendy account is approved",
-      text: [
-        `Hello ${String(accountRequest.name || "there").trim()},`,
-        "",
-        "Your Lendy account request has been approved.",
-        `Temporary password: ${temporaryPassword}`,
-        "",
-        "Sign in to the Lendy app with this password, then choose a new password.",
-        "If you did not request this account, contact your administrator.",
-      ].join("\n"),
+      throw new HttpError(502, "Could not check whether this email is available.");
+    }
+  }
+
+  const requestId = randomBytes(18).toString("base64url");
+  const statusToken = randomBytes(32).toString("base64url");
+  const requestRef = accountRequests.doc(requestId);
+  const lockRef = db.collection("accountRequestEmailLocks").doc(requestLockId(email));
+  const now = Date.now();
+  const requestData = {
+    id: requestId,
+    name,
+    email,
+    role,
+    idNumber,
+    college,
+    gender,
+    status: "pending",
+    statusTokenHash: createHash("sha256").update(statusToken).digest("hex"),
+    submittedAt: now,
+    updatedAt: now,
+    ...(role === "student" ? { yearLevel, block } : {}),
+  };
+
+  try {
+    await db.runTransaction(async (transaction) => {
+      const currentLock = await transaction.get(lockRef);
+      if (currentLock.exists) {
+        throw new HttpError(
+          409,
+          "There is already a request waiting for this email.",
+          "request-already-pending",
+        );
+      }
+      transaction.create(requestRef, requestData);
+      transaction.create(lockRef, { requestId, email, createdAt: now });
     });
   } catch (error) {
     if (error instanceof HttpError) throw error;
-    console.error("Could not set or email the temporary account password.", {
-      requestId,
-      authUid: accountRequest.authUid,
-      error: error.message,
-    });
-    throw new HttpError(
-      502,
-      "The account was approved, but the password email could not be sent. The requester can use the in-app password if it is available; use the resend action to try again.",
-    );
+    console.error("Could not save an account request.", { email, error: error.message });
+    throw new HttpError(500, "Could not submit the account request.");
   }
+  return { success: true, requestId, statusToken };
+}
+
+async function getAccountRequestStatus(data) {
+  const requestId = data && data.requestId;
+  const token = data && data.statusToken;
+  if (
+    typeof requestId !== "string" ||
+    !/^[A-Za-z0-9_-]{1,150}$/.test(requestId) ||
+    typeof token !== "string" ||
+    token.length < 32
+  ) {
+    throw new HttpError(400, "The account request status credentials are invalid.");
+  }
+  const requestRef = db.collection("accountRequests").doc(requestId);
+  const snapshot = await requestRef.get();
+  if (!snapshot.exists) {
+    throw new HttpError(404, "This request was removed or is no longer available.", "request-removed");
+  }
+  const request = snapshot.data();
+  const tokenHash = request.statusTokenHash;
+  const providedHash = createHash("sha256").update(token).digest("hex");
+  if (
+    typeof tokenHash !== "string" ||
+    !/^[a-f0-9]{64}$/.test(tokenHash) ||
+    !timingSafeEqual(Buffer.from(tokenHash, "hex"), Buffer.from(providedHash, "hex"))
+  ) {
+    throw new HttpError(403, "The account request status credentials are invalid.");
+  }
+
+  const approvalComplete =
+    request.status === "approved" &&
+    request.credentialEmailStatus === "sent";
+  let temporaryPassword;
+  if (approvalComplete) {
+    const credential = await requestRef
+      .collection("privateCredentials")
+      .doc("temporary")
+      .get();
+    if (credential.exists) {
+      temporaryPassword = credential.data().temporaryPassword;
+    }
+  }
+  return {
+    status: request.status === "approved" && !approvalComplete
+      ? "pending"
+      : request.status,
+    name: request.name,
+    email: request.email,
+    credentialEmailStatus: request.credentialEmailStatus,
+    ...(typeof temporaryPassword === "string" ? { temporaryPassword } : {}),
+  };
+}
+
+async function sendTemporaryPassword(accountRequest, requestId, user, temporaryPassword) {
+  const email = String(accountRequest.email || "").trim().toLowerCase();
+  if (!isValidEmail(email)) {
+    throw new HttpError(409, "The account request has an invalid email.");
+  }
+  const { email: sender, transporter } = getEmailTransporter();
+  await auth.updateUser(user.uid, { password: temporaryPassword });
+  const requestRef = db.collection("accountRequests").doc(requestId);
+  await requestRef.collection("privateCredentials").doc("temporary").set({
+    temporaryPassword,
+    createdAt: Date.now(),
+  });
+  await transporter.sendMail({
+    from: `Lendy <${sender}>`,
+    to: email,
+    subject: "Your Lendy account is approved",
+    text: [
+      `Hello ${String(accountRequest.name || "there").trim()},`,
+      "",
+      "Your Lendy account request has been approved.",
+      `Temporary password: ${temporaryPassword}`,
+      "",
+      "Sign in to the Lendy app with this password, then choose a new password.",
+      "If you did not request this account, contact your administrator.",
+    ].join("\n"),
+  });
 }
 
 async function approveRequest(data) {
@@ -268,42 +446,73 @@ async function approveRequest(data) {
   if (accountRequest.status !== "pending") {
     throw new HttpError(409, "This account request is no longer pending.");
   }
-  if (
-    typeof accountRequest.authUid !== "string" ||
-    accountRequest.authUid.length === 0
-  ) {
-    throw new HttpError(
-      409,
-      "This request has no linked sign-in account. Ask the user to submit a new request.",
-    );
-  }
-  const email = String(accountRequest.email || "").trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  const email = normalizedEmail(accountRequest.email);
+  if (!isValidEmail(email)) {
     throw new HttpError(409, "The account request has an invalid email.");
   }
 
+  const accountRef = db.collection("accounts");
+  const temporaryPassword = randomBytes(18).toString("base64url");
   let user;
-  try {
-    user = await auth.getUser(accountRequest.authUid);
-    if (user.email?.toLowerCase() !== email) {
+  let createdAuthUser = false;
+  if (typeof accountRequest.authUid === "string" && accountRequest.authUid) {
+    try {
+      user = await auth.getUser(accountRequest.authUid);
+      if (user.email?.toLowerCase() !== email) {
+        throw new HttpError(409, "The request email does not match its sign-in account.");
+      }
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      if (error.code !== "auth/user-not-found") {
+        throw new HttpError(502, "Could not verify the request sign-in account.");
+      }
+    }
+  }
+  if (!user) {
+    try {
+      const existingUser = await auth.getUserByEmail(email);
+      const [existingAccount, adminRecord] = await Promise.all([
+        accountRef.doc(existingUser.uid).get(),
+        db.collection("admins").doc(existingUser.uid).get(),
+      ]);
+      if (
+        existingAccount.exists ||
+        (adminRecord.exists && adminRecord.data().role === "admin")
+      ) {
+        throw new HttpError(409, "This email already belongs to an account.");
+      }
       throw new HttpError(
         409,
-        "The request email does not match its Firebase Authentication account.",
+        "This email already has a sign-in account. Contact an administrator for help.",
+        "email-already-in-use",
       );
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      if (error.code !== "auth/user-not-found") {
+        throw new HttpError(502, "Could not check the request email.");
+      }
     }
-  } catch (error) {
-    if (error instanceof HttpError) throw error;
-    console.error("Could not verify the linked Firebase Authentication account.", {
-      requestId,
-      authUid: accountRequest.authUid,
-      error: error.message,
-    });
-    throw new HttpError(
-      502,
-      "Could not verify the request's Firebase Authentication account.",
-    );
+    try {
+      user = await auth.createUser({
+        email,
+        password: temporaryPassword,
+        displayName: String(accountRequest.name || "").trim(),
+      });
+      createdAuthUser = true;
+    } catch (error) {
+      if (error.code === "auth/email-already-exists") {
+        throw new HttpError(409, "This email already belongs to an account.");
+      }
+      console.error("Could not create the approved user's sign-in account.", {
+        requestId,
+        error: error.message,
+      });
+      throw new HttpError(502, "Could not create the approved user's sign-in account.");
+    }
   }
-  const accountRef = db.collection("accounts").doc(user.uid);
+
+  const userAccountRef = accountRef.doc(user.uid);
+  let accountCreated = false;
   const now = Date.now();
   try {
     await db.runTransaction(async (transaction) => {
@@ -311,7 +520,6 @@ async function approveRequest(data) {
       const current = latestRequest.data();
       if (
         !latestRequest.exists ||
-        current.authUid !== user.uid ||
         current.status !== "pending"
       ) {
         throw new HttpError(
@@ -320,15 +528,24 @@ async function approveRequest(data) {
         );
       }
 
-      const account = await transaction.get(accountRef);
-      if (account.exists && account.data().status === "revoked") {
+      const account = await transaction.get(userAccountRef);
+      if (account.exists) {
         throw new HttpError(
           409,
-          "This user account is revoked and cannot be approved from this request.",
+          account.data().status === "revoked"
+            ? "This user account is revoked and cannot be approved from this request."
+            : "This email already belongs to an account.",
         );
       }
+      const lockRef = db
+        .collection("accountRequestEmailLocks")
+        .doc(requestLockId(email));
+      const lock = await transaction.get(lockRef);
+      if (lock.exists && lock.data().requestId !== requestId) {
+        throw new HttpError(409, "Another request is already using this email.");
+      }
       transaction.set(
-        accountRef,
+        userAccountRef,
         {
           id: user.uid,
           name: String(accountRequest.name || "").trim(),
@@ -352,19 +569,28 @@ async function approveRequest(data) {
             : {}),
           status: "active",
           mustChangePassword: true,
-          createdAt: account.exists ? account.data().createdAt || now : now,
+          createdAt: now,
         },
-        { merge: true },
       );
       transaction.update(requestRef, {
         status: "approved",
         accountId: user.uid,
-        credentialEmailStatus: "failed",
-        temporaryPassword: FieldValue.delete(),
+        authUid: user.uid,
+        credentialEmailStatus: "sending",
         updatedAt: now,
       });
     });
+    accountCreated = true;
   } catch (error) {
+    if (createdAuthUser) {
+      await auth.deleteUser(user.uid).catch((cleanupError) => {
+        console.error("Could not remove a sign-in account after failed approval.", {
+          requestId,
+          authUid: user.uid,
+          error: cleanupError.message,
+        });
+      });
+    }
     if (error instanceof HttpError) throw error;
     console.error("Could not save the approved account.", {
       requestId,
@@ -375,66 +601,73 @@ async function approveRequest(data) {
   }
 
   try {
-    await sendTemporaryPassword(accountRequest, requestId);
-    await requestRef.update({
-      credentialEmailStatus: "sent",
-      credentialsEmailedAt: Date.now(),
-    });
-    return { success: true, emailSent: true };
+    await sendTemporaryPassword(accountRequest, requestId, user, temporaryPassword);
   } catch (error) {
-    console.error("The account was approved but credential email delivery failed.", {
+    console.error("Could not email the approved account's temporary password.", {
       requestId,
+      authUid: user.uid,
       error: error.message,
     });
-    return {
-      success: true,
-      emailSent: false,
-      message: error.message,
-    };
-  }
-}
-
-async function resendTemporaryPassword(data) {
-  const requestId = data && data.requestId;
-  if (
-    typeof requestId !== "string" ||
-    !/^[A-Za-z0-9_-]{1,150}$/.test(requestId)
-  ) {
-    throw new HttpError(400, "A valid account request ID is required.");
-  }
-  getEmailTransporter();
-
-  const requestRef = db.collection("accountRequests").doc(requestId);
-  const requestSnapshot = await requestRef.get();
-  if (!requestSnapshot.exists || requestSnapshot.data().status !== "approved") {
-    throw new HttpError(409, "Only approved account requests can receive a new password.");
-  }
-  const accountRequest = requestSnapshot.data();
-  const accountSnapshot = await db
-    .collection("accounts")
-    .doc(accountRequest.accountId)
-    .get();
-  if (
-    !accountSnapshot.exists ||
-    accountSnapshot.data().status !== "active" ||
-    accountSnapshot.data().mustChangePassword !== true
-  ) {
+    await deleteRequestCredentials(requestRef).catch((cleanupError) => {
+      console.error("Could not remove temporary credentials after failed delivery.", {
+        requestId,
+        error: cleanupError.message,
+      });
+    });
+    try {
+      if (accountCreated) await userAccountRef.delete();
+      if (createdAuthUser) await auth.deleteUser(user.uid);
+      await requestRef.update({
+        status: "pending",
+        accountId: FieldValue.delete(),
+        ...(createdAuthUser
+          ? { authUid: FieldValue.delete() }
+          : { authUid: user.uid }),
+        credentialEmailStatus: FieldValue.delete(),
+        credentialsEmailedAt: FieldValue.delete(),
+        updatedAt: Date.now(),
+      });
+    } catch (cleanupError) {
+      console.error("Could not roll back an approval with failed email delivery.", {
+        requestId,
+        authUid: user.uid,
+        error: cleanupError.message,
+      });
+    }
     throw new HttpError(
-      409,
-      "This account has already completed its password setup and cannot receive another temporary password.",
+      502,
+      "The request was not approved because the temporary password email could not be sent. Check the email settings and try again.",
     );
   }
 
-  await requestRef.update({
-    credentialEmailStatus: "failed",
-    temporaryPassword: FieldValue.delete(),
-    updatedAt: Date.now(),
-  });
-  await sendTemporaryPassword(accountRequest, requestId);
-  await requestRef.update({
-    credentialEmailStatus: "sent",
-    credentialsEmailedAt: Date.now(),
-  });
+  try {
+    await requestRef.update({
+      credentialEmailStatus: "sent",
+      credentialsEmailedAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  } catch (error) {
+    console.error("Temporary password was emailed, but approval status could not be finalized.", {
+      requestId,
+      error: error.message,
+    });
+    throw new HttpError(
+      500,
+      "The temporary password was emailed, but the approval status could not be finalized. Refresh the request list.",
+    );
+  }
+  try {
+    await releaseRequestEmailLock(email, requestId);
+  } catch (error) {
+    console.error("Could not clear the email lock after successful approval.", {
+      requestId,
+      error: error.message,
+    });
+    throw new HttpError(
+      500,
+      "The account was approved and its temporary password was emailed, but the request email lock could not be cleared.",
+    );
+  }
   return { success: true, emailSent: true };
 }
 
@@ -457,113 +690,60 @@ async function rejectAccountRequest(data) {
     throw new HttpError(409, "Only pending or previously rejected requests can be rejected.");
   }
 
+  let authAccountDeleted = true;
+  let rejectedUser;
   if (typeof request.authUid === "string" && request.authUid) {
     try {
-      await auth.deleteUser(request.authUid);
+      rejectedUser = await auth.getUser(request.authUid);
+      if (rejectedUser.email?.toLowerCase() !== normalizedEmail(request.email)) {
+        throw new HttpError(409, "The rejected request is linked to a different email account.");
+      }
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      if (error.code !== "auth/user-not-found") {
+        throw new HttpError(502, "Could not verify the rejected request's sign-in account.");
+      }
+    }
+  } else if (request.status === "rejected" && isValidEmail(request.email)) {
+    try {
+      rejectedUser = await auth.getUserByEmail(normalizedEmail(request.email));
     } catch (error) {
       if (error.code !== "auth/user-not-found") {
-        console.error("Could not remove the rejected request's sign-in account.", {
-          requestId,
-          authUid: request.authUid,
-          error: error.message,
-        });
-        throw new HttpError(
-          502,
-          "The sign-in account could not be removed, so the request was kept for cleanup. Retry the rejection.",
-        );
+        throw new HttpError(502, "Could not verify the rejected request's sign-in account.");
+      }
+    }
+  }
+
+  if (rejectedUser) {
+    const [existingAccount, adminRecord] = await Promise.all([
+      db.collection("accounts").doc(rejectedUser.uid).get(),
+      db.collection("admins").doc(rejectedUser.uid).get(),
+    ]);
+    if (existingAccount.exists || adminRecord.exists) {
+      authAccountDeleted = false;
+    } else {
+      try {
+        await auth.deleteUser(rejectedUser.uid);
+      } catch (error) {
+        if (error.code !== "auth/user-not-found") {
+          console.error("Could not remove the rejected request's sign-in account.", {
+            requestId,
+            authUid: rejectedUser.uid,
+            error: error.message,
+          });
+          throw new HttpError(
+            502,
+            "The sign-in account could not be removed, so the request was kept for cleanup. Retry the rejection.",
+          );
+        }
       }
     }
   }
 
   await deleteRequestCredentials(requestRef);
   await requestRef.delete();
-  return { success: true, requestDeleted: true, authAccountDeleted: true };
-}
-
-async function deleteRequestCredentials(requestRef) {
-  const credentials = await requestRef.collection("privateCredentials").get();
-  for (let offset = 0; offset < credentials.docs.length; offset += 400) {
-    const batch = db.batch();
-    credentials.docs.slice(offset, offset + 400).forEach((credential) => {
-      batch.delete(credential.ref);
-    });
-    await batch.commit();
-  }
-}
-
-async function cleanupOrphanedSignIn(data) {
-  const email = typeof data?.email === "string"
-    ? data.email.trim().toLowerCase()
-    : "";
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new HttpError(400, "Enter a valid email address.");
-  }
-
-  const [accounts, requests] = await Promise.all([
-    db.collection("accounts").where("email", "==", email).limit(2).get(),
-    db.collection("accountRequests").where("email", "==", email).get(),
-  ]);
-  if (!accounts.empty) {
-    throw new HttpError(
-      409,
-      "This email belongs to an existing account and cannot be cleared as an orphan.",
-    );
-  }
-  const blockedRequest = requests.docs.find(
-    (document) => document.data().status !== "rejected",
-  );
-  if (blockedRequest) {
-    throw new HttpError(
-      409,
-      "This email has a non-rejected account request. Resolve that request first.",
-    );
-  }
-
-  let user;
-  try {
-    user = await auth.getUserByEmail(email);
-  } catch (error) {
-    if (error.code === "auth/user-not-found") {
-      for (const request of requests.docs) {
-        await deleteRequestCredentials(request.ref);
-        await request.ref.delete();
-      }
-      return { success: true, alreadyClean: true };
-    }
-    console.error("Could not find the orphaned sign-in account.", {
-      email,
-      error: error.message,
-    });
-    throw new HttpError(502, "Could not verify the sign-in account.");
-  }
-
-  for (const request of requests.docs) {
-    if (
-      typeof request.data().authUid === "string" &&
-      request.data().authUid !== user.uid
-    ) {
-      throw new HttpError(
-        409,
-        "A rejected request for this email is linked to a different sign-in account.",
-      );
-    }
-  }
-
-  try {
-    await auth.deleteUser(user.uid);
-  } catch (error) {
-    console.error("Could not remove the orphaned sign-in account.", {
-      email,
-      authUid: user.uid,
-      error: error.message,
-    });
-    throw new HttpError(502, "Could not remove the sign-in account.");
-  }
-  for (const request of requests.docs) {
-    await deleteRequestCredentials(request.ref);
-    await request.ref.delete();
-  }
-  return { success: true, authAccountDeleted: true, requestDeleted: true };
+  await releaseRequestEmailLock(normalizedEmail(request.email), requestId);
+  return { success: true, requestDeleted: true, authAccountDeleted };
 }
 
 async function deleteAccount(data, adminUid) {
@@ -1197,13 +1377,24 @@ const server = http.createServer(async (request, response) => {
   }
 
   const origin = request.headers.origin;
-  if (!origin || !allowedOrigins.has(origin)) {
+  const publicAppRoutes = new Set([
+    "/request-account",
+    "/account-request-status",
+  ]);
+  const isPublicAppRoute =
+    request.method === "POST" && publicAppRoutes.has(request.url);
+  if ((origin && !allowedOrigins.has(origin)) || (!origin && !isPublicAppRoute)) {
     response.writeHead(403, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ error: "Origin is not allowed." }));
     return;
   }
 
   if (request.method === "OPTIONS") {
+    if (!origin) {
+      response.writeHead(400);
+      response.end();
+      return;
+    }
     response.writeHead(204, {
       "Access-Control-Allow-Headers": "Authorization, Content-Type",
       "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -1217,10 +1408,10 @@ const server = http.createServer(async (request, response) => {
   if (
     request.method !== "POST" ||
     ![
+      "/request-account",
+      "/account-request-status",
       "/approve-account",
-      "/resend-account-password",
       "/reject-account",
-      "/cleanup-orphaned-sign-in",
       "/delete-account",
       "/assistant",
     ].includes(request.url)
@@ -1230,16 +1421,20 @@ const server = http.createServer(async (request, response) => {
   }
 
   try {
-    const adminUid = await requireAdmin(request);
     const data = await readJson(request);
+    if (request.url === "/request-account") {
+      sendJson(response, 201, await createAccountRequest(data), origin);
+      return;
+    }
+    if (request.url === "/account-request-status") {
+      sendJson(response, 200, await getAccountRequestStatus(data), origin);
+      return;
+    }
+    const adminUid = await requireAdmin(request);
     const result = request.url === "/approve-account"
       ? await approveRequest(data)
-      : request.url === "/resend-account-password"
-        ? await resendTemporaryPassword(data)
       : request.url === "/reject-account"
         ? await rejectAccountRequest(data)
-      : request.url === "/cleanup-orphaned-sign-in"
-        ? await cleanupOrphanedSignIn(data)
       : request.url === "/delete-account"
         ? await deleteAccount(data, adminUid)
         : await answerAssistant(data, adminUid);
@@ -1249,7 +1444,10 @@ const server = http.createServer(async (request, response) => {
     if (!(error instanceof HttpError)) {
       console.error("Unhandled approval-service request error.", error);
     }
-    sendJson(response, status, { error: error.message }, origin);
+    sendJson(response, status, {
+      error: error.message,
+      ...(error.code ? { code: error.code } : {}),
+    }, origin);
   }
 });
 
