@@ -1,10 +1,12 @@
-# In-app account approval with temporary passwords
+# Account approval with emailed temporary passwords
 
-Firebase remains on the Spark plan. A separately hosted Node.js service uses
-Firebase Admin SDK to securely set the admin's temporary password and activate
-the account. The mobile app displays the password in a copyable card while the
-requester is signed in. No Resend account, custom email domain, Cloud Functions,
-or Secret Manager is needed.
+The account approval flow uses a separately hosted Node.js service and the
+Firebase Admin SDK to generate a temporary password, activate the account, and
+email the password to the address on the approved request. The password is not
+stored in Firestore or returned to the dashboard. The user must change it after
+the first sign-in. Gmail SMTP is used for email delivery; this does not need
+Resend or Cloud Functions. Push notifications are handled separately by the
+Firebase Cloud Functions described below.
 
 ## Configure Firebase
 
@@ -51,6 +53,8 @@ The repository includes a Render Blueprint in `render.yaml`.
    | `FIREBASE_SERVICE_ACCOUNT_JSON` | The complete JSON for a Firebase service-account key |
    | `GEMINI_API_KEY` | A Gemini API key from Google AI Studio |
    | `ALLOWED_ORIGINS` | The exact admin dashboard origin(s), comma-separated, with no trailing slash |
+   | `EMAIL_USER` | The Gmail address that will send account emails |
+   | `EMAIL_APP_PASSWORD` | A Google App Password for that Gmail account |
 
 4. To create the service-account key, open Firebase Console → **Project
    settings → Service accounts → Generate new private key**. Store the
@@ -67,6 +71,15 @@ The repository includes a Render Blueprint in `render.yaml`.
 7. In `admin/firebase-config.js`, set
    `window.LENDY_APPROVAL_API_URL` to the service URL without a trailing slash,
    then publish the updated admin dashboard.
+
+To create the Gmail App Password, enable 2-Step Verification on the sending
+Google account, then create an App Password in that Google account's security
+settings. Put the 16-character App Password in Render as `EMAIL_APP_PASSWORD`;
+do not use the account's normal Gmail password. Keep both email values only in
+Render's environment settings, never in source code or `admin/firebase-config.js`.
+If the Render service already exists, add both values under that service's
+**Environment** settings and redeploy. The approval service uses Gmail's
+authenticated SMTP endpoint over TLS.
 
 The admin assistant uses Gemini only to turn an admin's question into a
 restricted set of supported database queries. The service verifies the admin,
@@ -91,29 +104,57 @@ read/write Firestore. Grant only the permissions needed for those tasks. The
 service handles admin-approved account activation and confirmed full-account
 deletion, including linked loan and account-request records.
 
+## Enable mobile notifications
+
+The mobile app registers its FCM device token in Firestore. The functions in
+`functions/` send approval, rejection, and return-status push notifications,
+and send daily due/overdue reminders. Deploying these functions is required for
+those server-generated alerts to arrive while the app is closed:
+
+1. Enable billing for the Firebase project (the Blaze plan is required for
+   Cloud Functions and the scheduled reminder job). Review Firebase pricing
+   and set a budget alert before enabling billing; usage may incur charges.
+2. From the repository root, install the Functions dependencies and deploy:
+
+   ```powershell
+   cd functions
+   npm install
+   cd ..
+   firebase deploy --only functions --project borrowing-system-lendy
+   ```
+3. Allow notifications for Lendy in the device's system settings. Sign in and
+   open the app with internet access so it can register the device token and
+   sync loan data.
+
+The app also schedules local return-date reminders on the device. Once a loan
+has synced and its reminder is scheduled, that reminder does not need internet
+or the app to be running. A server-side change (such as an admin approving a
+request) cannot be known by an offline device at the time it happens. FCM may
+deliver that push after the device reconnects, but it cannot show immediately
+while offline. Android may also defer alarms for an app that has been force
+stopped; open the app again to resume them.
+
 ## What users and admins will see
 
 - A requester submits their details and stays signed in on a waiting screen.
-- The admin approves the request and sets a temporary password in the admin
-  dashboard.
-- The service sets that password in Firebase Authentication, activates the
-  account, marks `mustChangePassword: true`, and saves the temporary password
-  on that request for the signed-in requester to read.
-- The mobile app updates to show a card with the temporary password and a
-  **Copy** button. After copying, the requester continues to Login and signs
-  in with that password.
+- The admin approves the request. The service generates a random temporary
+  password, activates the account, marks `mustChangePassword: true`, and emails
+  the password to the same email address used by its Firebase Authentication
+  account.
+- The mobile app confirms that the password was emailed; it does not display
+  or store the password. The requester signs in with the emailed password.
 - The first successful sign-in opens **Set new password** before the
   homepage. Returning users who already changed their password go straight to
   the homepage.
-- After the new password is set, the app removes the temporary password from
-  the request document.
+- If email delivery fails, the account is still approved and the dashboard
+  shows a resend action under **Requests & accounts → Accounts**. Resending
+  generates a new temporary password and invalidates the previous one.
 
 Firestore rules allow only the requester and admins to read account requests.
-The mobile app must remain signed in to show the waiting screen and password
-card. Closing and reopening the app should retain its Firebase sign-in. If the
-requester manually signs out before approval, they will need help from an
-administrator because the pending account's randomly generated password is
-not shown to them.
+The mobile app must remain signed in to show request status. Closing and
+reopening the app should retain its Firebase sign-in. If the requester signs
+out before approval, they can still use the emailed temporary password after
+the admin approves the request.
 
 Firebase Authentication and Firestore remain subject to Spark quotas. Render
 is a separate service and has its own plan limits and availability.

@@ -1,9 +1,11 @@
 const { initializeApp, cert } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
-const { getFirestore } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { randomBytes } = require("node:crypto");
 const http = require("node:http");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const nodemailer = require("nodemailer");
 
 const port = Number(process.env.PORT || 8080);
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -59,6 +61,7 @@ initializeApp({
 
 const auth = getAuth();
 const db = getFirestore();
+let emailTransporter;
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -161,25 +164,86 @@ async function requireAdmin(request) {
   return decodedToken.uid;
 }
 
+function getEmailTransporter() {
+  const email = (process.env.EMAIL_USER || "").trim();
+  const appPassword = (process.env.EMAIL_APP_PASSWORD || "").replace(/\s/g, "");
+  if (!email || !appPassword) {
+    throw new HttpError(
+      503,
+      "Email delivery is not configured. Set EMAIL_USER and EMAIL_APP_PASSWORD on the approval service.",
+    );
+  }
+  if (!emailTransporter) {
+    emailTransporter = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
+      auth: { user: email, pass: appPassword },
+    });
+  }
+  return { email, transporter: emailTransporter };
+}
+
+async function sendTemporaryPassword(accountRequest, requestId) {
+  const email = String(accountRequest.email || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpError(409, "The account request has an invalid email.");
+  }
+  if (
+    typeof accountRequest.authUid !== "string" ||
+    accountRequest.authUid.length === 0
+  ) {
+    throw new HttpError(409, "The request has no linked sign-in account.");
+  }
+  const { email: sender, transporter } = getEmailTransporter();
+  const temporaryPassword = randomBytes(18).toString("base64url");
+  let user;
+  try {
+    user = await auth.getUser(accountRequest.authUid);
+    if (user.email?.toLowerCase() !== email) {
+      throw new HttpError(
+        409,
+        "The request email does not match its Firebase Authentication account.",
+      );
+    }
+    await auth.updateUser(user.uid, { password: temporaryPassword });
+    await transporter.sendMail({
+      from: `Lendy <${sender}>`,
+      to: email,
+      subject: "Your Lendy account is approved",
+      text: [
+        `Hello ${String(accountRequest.name || "there").trim()},`,
+        "",
+        "Your Lendy account request has been approved.",
+        `Temporary password: ${temporaryPassword}`,
+        "",
+        "Sign in to the Lendy app with this password, then choose a new password.",
+        "If you did not request this account, contact your administrator.",
+      ].join("\n"),
+    });
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    console.error("Could not set or email the temporary account password.", {
+      requestId,
+      authUid: accountRequest.authUid,
+      error: error.message,
+    });
+    throw new HttpError(
+      502,
+      "The account was approved, but its temporary password could not be emailed. Use the resend action to try again.",
+    );
+  }
+}
+
 async function approveRequest(data) {
   const requestId = data && data.requestId;
-  const temporaryPassword = data && data.temporaryPassword;
   if (
     typeof requestId !== "string" ||
     !/^[A-Za-z0-9_-]{1,150}$/.test(requestId)
   ) {
     throw new HttpError(400, "A valid account request ID is required.");
   }
-  if (
-    typeof temporaryPassword !== "string" ||
-    temporaryPassword.length < 8 ||
-    temporaryPassword.length > 28
-  ) {
-    throw new HttpError(
-      400,
-      "The temporary password must be between 8 and 28 characters.",
-    );
-  }
+  getEmailTransporter();
 
   const requestRef = db.collection("accountRequests").doc(requestId);
   const requestSnapshot = await requestRef.get();
@@ -200,7 +264,6 @@ async function approveRequest(data) {
       "This request has no linked sign-in account. Ask the user to submit a new request.",
     );
   }
-
   const email = String(accountRequest.email || "").trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new HttpError(409, "The account request has an invalid email.");
@@ -215,20 +278,18 @@ async function approveRequest(data) {
         "The request email does not match its Firebase Authentication account.",
       );
     }
-    await auth.updateUser(user.uid, { password: temporaryPassword });
   } catch (error) {
     if (error instanceof HttpError) throw error;
-    console.error("Could not set the temporary account password.", {
+    console.error("Could not verify the linked Firebase Authentication account.", {
       requestId,
       authUid: accountRequest.authUid,
       error: error.message,
     });
     throw new HttpError(
       502,
-      "Could not set the temporary password in Firebase Authentication.",
+      "Could not verify the request's Firebase Authentication account.",
     );
   }
-
   const accountRef = db.collection("accounts").doc(user.uid);
   const now = Date.now();
   try {
@@ -285,7 +346,8 @@ async function approveRequest(data) {
       transaction.update(requestRef, {
         status: "approved",
         accountId: user.uid,
-        temporaryPassword,
+        credentialEmailStatus: "failed",
+        temporaryPassword: FieldValue.delete(),
         updatedAt: now,
       });
     });
@@ -299,7 +361,68 @@ async function approveRequest(data) {
     throw new HttpError(500, "Could not finish approving the account.");
   }
 
-  return { success: true };
+  try {
+    await sendTemporaryPassword(accountRequest, requestId);
+    await requestRef.update({
+      credentialEmailStatus: "sent",
+      credentialsEmailedAt: Date.now(),
+    });
+    return { success: true, emailSent: true };
+  } catch (error) {
+    console.error("The account was approved but credential email delivery failed.", {
+      requestId,
+      error: error.message,
+    });
+    return {
+      success: true,
+      emailSent: false,
+      message: error.message,
+    };
+  }
+}
+
+async function resendTemporaryPassword(data) {
+  const requestId = data && data.requestId;
+  if (
+    typeof requestId !== "string" ||
+    !/^[A-Za-z0-9_-]{1,150}$/.test(requestId)
+  ) {
+    throw new HttpError(400, "A valid account request ID is required.");
+  }
+  getEmailTransporter();
+
+  const requestRef = db.collection("accountRequests").doc(requestId);
+  const requestSnapshot = await requestRef.get();
+  if (!requestSnapshot.exists || requestSnapshot.data().status !== "approved") {
+    throw new HttpError(409, "Only approved account requests can receive a new password.");
+  }
+  const accountRequest = requestSnapshot.data();
+  const accountSnapshot = await db
+    .collection("accounts")
+    .doc(accountRequest.accountId)
+    .get();
+  if (
+    !accountSnapshot.exists ||
+    accountSnapshot.data().status !== "active" ||
+    accountSnapshot.data().mustChangePassword !== true
+  ) {
+    throw new HttpError(
+      409,
+      "This account has already completed its password setup and cannot receive another temporary password.",
+    );
+  }
+
+  await requestRef.update({
+    credentialEmailStatus: "failed",
+    temporaryPassword: FieldValue.delete(),
+    updatedAt: Date.now(),
+  });
+  await sendTemporaryPassword(accountRequest, requestId);
+  await requestRef.update({
+    credentialEmailStatus: "sent",
+    credentialsEmailedAt: Date.now(),
+  });
+  return { success: true, emailSent: true };
 }
 
 async function deleteAccount(data, adminUid) {
@@ -952,7 +1075,12 @@ const server = http.createServer(async (request, response) => {
   }
   if (
     request.method !== "POST" ||
-    !["/approve-account", "/delete-account", "/assistant"].includes(request.url)
+    ![
+      "/approve-account",
+      "/resend-account-password",
+      "/delete-account",
+      "/assistant",
+    ].includes(request.url)
   ) {
     sendJson(response, 404, { error: "Endpoint not found." }, origin);
     return;
@@ -963,6 +1091,8 @@ const server = http.createServer(async (request, response) => {
     const data = await readJson(request);
     const result = request.url === "/approve-account"
       ? await approveRequest(data)
+      : request.url === "/resend-account-password"
+        ? await resendTemporaryPassword(data)
       : request.url === "/delete-account"
         ? await deleteAccount(data, adminUid)
         : await answerAssistant(data, adminUid);

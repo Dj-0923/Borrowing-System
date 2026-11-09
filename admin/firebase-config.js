@@ -10,7 +10,7 @@ window.LENDY_FIREBASE_CONFIG = {
   projectId: "borrowing-system-lendy",
   storageBucket: "borrowing-system-lendy.firebasestorage.app",
   messagingSenderId: "325712193434",
-  appId: "1:325712193434:web:589e74cf477099b6b97c23"
+  appId: "1:325712193434:android:8177cdd6ae201806b97c23"
 };
 
 // Set this to the deployed approval-server URL from FIREBASE_SETUP.md.

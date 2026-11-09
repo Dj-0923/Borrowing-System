@@ -543,11 +543,23 @@
   }
   function accountsTab() {
     var list = db.accounts.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
+    var failedEmails = db.accountRequests.filter(function (request) {
+      var account = db.accounts.find(function (item) { return item.id === request.accountId; });
+      return request.status === 'approved' &&
+        request.credentialEmailStatus !== 'sent' &&
+        account && account.mustChangePassword === true;
+    });
     if (!list.length) {
       return emptyState('userplus', 'No accounts yet', 'Approve a pending request and it will show up here as an active account.');
     }
     var C = 'grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.6fr)_110px_44px]';
     return '<div class="overflow-x-auto rounded-2xl shadow-soft"><div class="min-w-[680px] rounded-2xl border border-line bg-card overflow-hidden">' +
+      (failedEmails.length ? '<div class="border-b border-line bg-amber-50 px-4 py-3"><p class="text-sm font-semibold text-amber-900">Password email not sent</p>' +
+        '<p class="text-xs text-amber-800 mt-1">Check the email settings on the approval service, then resend.</p>' +
+        failedEmails.map(function (request) {
+          return '<div class="mt-2 flex items-center justify-between gap-3 text-sm"><span class="truncate">' + esc(request.name) + ' · ' + esc(request.email) + '</span>' +
+            '<button class="btn btn-primary btn-sm shrink-0" data-action="resend-account-password" data-id="' + esc(request.id) + '">Resend password</button></div>';
+        }).join('') + '</div>' : '') +
       '<div class="grid ' + C + ' gap-3 px-4 py-3 bg-head text-[13px] font-bold"><span>Name</span><span>Role</span><span>Email</span><span>Status</span><span></span></div>' +
       list.map(function (a) {
         return '<div class="grid ' + C + ' gap-3 px-4 py-3.5 items-center text-[13px] border-t border-line">' +
@@ -917,10 +929,6 @@
       return formError('This account request is no longer awaiting approval.');
     }
     if (!r.authUid) return formError('This request was created before the free-plan account flow. Ask the user to submit a new request.');
-    var password = String(new FormData(form).get('temporaryPassword') || '');
-    if (password.length < 8 || password.length > 28) {
-      return formError('Temporary password must be between 8 and 28 characters.');
-    }
     var submitButton = form.querySelector('button[type=submit]');
     if (submitButton) submitButton.disabled = true;
     var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
@@ -936,7 +944,7 @@
             Authorization: 'Bearer ' + idToken,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ requestId: requestId, temporaryPassword: password })
+          body: JSON.stringify({ requestId: requestId })
         });
       })
       .then(function (response) {
@@ -945,15 +953,50 @@
           return body;
         });
       })
-      .then(function () {
+      .then(function (result) {
         closeModal();
         render();
-        toast('Approved the account. The temporary password is now available in the user’s app.');
+        if (result.emailSent) {
+          toast('Approved the account and emailed a temporary password to ' + r.email + '.');
+        } else {
+          toast('Account approved, but the password email failed. Retry it from the Accounts tab.', 'bad');
+        }
       })
       .catch(function (err) {
         if (submitButton) submitButton.disabled = false;
         formError('Could not finish approval: ' + err.message);
       });
+  }
+  function resendTemporaryPassword(requestId) {
+    var request = db.accountRequests.find(function (x) { return x.id === requestId; });
+    if (!request || request.status !== 'approved') return;
+    var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
+    if (!endpoint) {
+      toast('The account approval service URL is not configured. Follow FIREBASE_SETUP.md.', 'bad');
+      return;
+    }
+    auth.currentUser.getIdToken()
+      .then(function (idToken) {
+        return fetch(endpoint + '/resend-account-password', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + idToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ requestId: requestId })
+        });
+      })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body.error || 'Approval service returned HTTP ' + response.status + '.');
+          return body;
+        });
+      })
+      .then(function (result) {
+        if (!result.emailSent) throw new Error(result.message || 'The email could not be sent.');
+        toast('A new temporary password was emailed to ' + request.email + '.');
+      })
+      .catch(fail('Could not resend the temporary password'));
   }
   function rejectRequest(id) {
     var r = db.accountRequests.find(function (x) { return x.id === id; });
@@ -1126,15 +1169,12 @@
         '<div class="mt-6 flex justify-end"><button class="btn btn-ghost" data-action="close-modal">Close</button></div>';
     }
     return modalHead('Approve account',
-      'Set a temporary password for ' + esc(request.name) + '.') +
-      '<p class="text-sm text-muted mt-3">After approval, the user will see the temporary password in the mobile app and must change it after signing in.</p>' +
+      'A temporary password will be generated and emailed to ' + esc(request.email) + '.') +
+      '<p class="text-sm text-muted mt-3">The user must change this password after signing in. The password will not be saved in Firestore or shown in the admin dashboard.</p>' +
       '<form data-form="approve-account" data-request-id="' + esc(request.id) + '" novalidate class="mt-5 grid gap-4">' +
-      '<div><label class="lbl" for="approval-password">Temporary password</label>' +
-      '<input id="approval-password" name="temporaryPassword" type="text" class="field" minlength="8" maxlength="28" autocomplete="off" required>' +
-      '<p class="text-[11px] text-muted mt-1">Use 8 to 28 characters. The user must change it at first login.</p></div>' +
       '<p id="form-error" class="text-sm t-bad min-h-[1.25rem]" role="alert"></p>' +
       '<div class="flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button>' +
-      '<button type="submit" class="btn btn-primary">Approve and show password</button></div></form>';
+      '<button type="submit" class="btn btn-primary">Approve and email password</button></div></form>';
   }
   function itemUrl(id) {
     // item.html lives next to index.html, so this works wherever the app is hosted.
@@ -1727,6 +1767,7 @@
       case 'reject': reject(id); break;
       case 'approve-request': approveRequest(id); break;
       case 'reject-request': rejectRequest(id); break;
+      case 'resend-account-password': resendTemporaryPassword(id); break;
       case 'requests-tab': state.tab.requests = el.dataset.tab; render(); break;
       case 'open-account': openModal({ type: 'account', id: id }); break;
       case 'users-role': state.filter.usersRole = el.dataset.value; render(); break;
