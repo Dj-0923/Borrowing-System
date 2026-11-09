@@ -25,10 +25,14 @@ const renderOrigin = process.env.RENDER_EXTERNAL_HOSTNAME
   ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`
   : null;
 const allowedOrigins = new Set(
-  (process.env.ALLOWED_ORIGINS || "")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean),
+  [
+    ...(process.env.ALLOWED_ORIGINS || "")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+    "https://borrowing-system-lendy.web.app",
+    "https://borrowing-system-lendy.firebaseapp.com",
+  ],
 );
 if (renderOrigin) allowedOrigins.add(renderOrigin);
 

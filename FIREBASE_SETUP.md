@@ -63,10 +63,12 @@ The repository includes a Render Blueprint in `render.yaml`.
    downloaded key securely and enter its complete JSON only in Render's
    environment-variable field. Never commit it, put it in the admin app, or
    share it in chat. Anyone with this key can administer project data.
-5. Set `ALLOWED_ORIGINS` to the exact origin where the admin dashboard is
-   hosted, e.g. `https://your-admin-site.web.app`. For local testing, include
-   the local web-server origin, e.g. `http://localhost:5500`. Do not use a
-   `file://` URL.
+5. The production dashboard origins
+   `https://borrowing-system-lendy.web.app` and
+   `https://borrowing-system-lendy.firebaseapp.com` are allowed automatically.
+   Add any custom dashboard domain or local web-server origin (e.g.
+   `http://localhost:5500`) to `ALLOWED_ORIGINS`, comma-separated. Use exact
+   origins with no trailing slash; do not use a `file://` URL.
 6. Wait for deployment and copy the service's public HTTPS URL. Open
    `https://YOUR-SERVICE.onrender.com/health`; it should return
    `{"status":"ok"}`.
