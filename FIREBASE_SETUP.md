@@ -207,5 +207,12 @@ pending request documents directly. Legacy rejected requests are cleaned up
 through the approval service, including removal of any old linked sign-in
 account.
 
+When an admin permanently deletes an account, the approval service disables
+the account first, then removes its Firebase Authentication user, account
+profile, linked loan records, notifications, device registrations, related
+account requests and their temporary credentials, and request-email locks.
+If cleanup is interrupted, the account remains disabled so the admin can retry
+the delete action.
+
 Firebase Authentication and Firestore remain subject to Spark quotas. Render
 is a separate service and has its own plan limits and availability.
