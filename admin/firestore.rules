@@ -190,7 +190,7 @@ service cloud.firestore {
     }
     match /accounts/{accountId} {
       allow read: if isAdmin()
-        || (hasActiveAccount() && request.auth.uid == accountId);
+        || (signedIn() && request.auth.uid == accountId);
       allow create, delete: if isAdmin();
       allow update: if isAdmin()
         || (hasActiveAccount()
