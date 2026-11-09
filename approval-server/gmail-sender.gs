@@ -66,7 +66,8 @@ function doPost(event) {
 }
 
 function authorizeGmailSender() {
-  var remainingQuota = GmailApp.getRemainingDailyQuota();
+  GmailApp.getAliases();
+  var remainingQuota = MailApp.getRemainingDailyQuota();
   console.log(
     "Gmail sender authorization is active. Remaining recipient quota: " +
       remainingQuota,
