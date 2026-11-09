@@ -217,7 +217,8 @@ async function sendEmailWithGmailScript({
 }) {
   let response;
   try {
-    response = await fetch(scriptUrl, {
+    let url = scriptUrl;
+    let options = {
       method: "POST",
       redirect: "manual",
       headers: { "Content-Type": "application/json" },
@@ -229,17 +230,33 @@ async function sendEmailWithGmailScript({
         text,
       }),
       signal: AbortSignal.timeout(20000),
-    });
-    if (response.status >= 300 && response.status < 400) {
+    };
+
+    for (let redirects = 0; redirects <= 5; redirects += 1) {
+      response = await fetch(url, options);
+      if (response.status < 300 || response.status >= 400) break;
       const location = response.headers.get("location");
       if (!location) {
         throw new Error("The Gmail sender returned a redirect without a destination.");
       }
-      response = await fetch(new URL(location, scriptUrl), {
+      if (redirects === 5) {
+        throw new Error("The Gmail sender exceeded the redirect limit.");
+      }
+      const redirectUrl = new URL(location, url);
+      if (
+        redirectUrl.protocol !== "https:" ||
+        !["script.google.com", "script.googleusercontent.com"].includes(
+          redirectUrl.hostname,
+        )
+      ) {
+        throw new Error("The Gmail sender redirected to an unexpected host.");
+      }
+      url = redirectUrl;
+      options = {
         method: "GET",
-        redirect: "error",
+        redirect: "manual",
         signal: AbortSignal.timeout(20000),
-      });
+      };
     }
   } catch (error) {
     console.error("Could not reach the Gmail Apps Script sender.", {
@@ -248,11 +265,20 @@ async function sendEmailWithGmailScript({
     throw new HttpError(502, "Could not connect to the Gmail email sender.");
   }
 
+  const responseText = await response.text();
   let result;
   try {
-    result = await response.json();
-  } catch {
-    throw new HttpError(502, "The Gmail email sender returned an invalid response.");
+    result = JSON.parse(responseText);
+  } catch (error) {
+    console.error("The Gmail sender returned a non-JSON response.", {
+      status: response.status,
+      contentType: response.headers.get("content-type"),
+      responsePreview: responseText.slice(0, 400),
+    });
+    throw new HttpError(
+      502,
+      "The Gmail email sender returned an invalid response. Check its deployment access and execution logs.",
+    );
   }
   if (!response.ok || result.success !== true) {
     console.error("Gmail Apps Script could not send the message.", {

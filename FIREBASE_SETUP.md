@@ -113,6 +113,13 @@ If **Anyone** is not available when deploying the Apps Script web app, the
 Google account's organization policy may block anonymous access. Use a personal
 Gmail account or configure an HTTPS email provider instead.
 
+If Render logs report that the Gmail sender returned an invalid response,
+confirm the Apps Script deployment is a **Web app** set to **Execute as: Me**
+and **Who has access: Anyone**. After changing the script code, edit the
+existing deployment to use a new version, or create a new deployment, then
+update `GMAIL_APPS_SCRIPT_URL` in Render if the URL changed. Check the Apps
+Script **Executions** page for authorization or Gmail quota errors.
+
 The admin assistant uses Gemini only to turn an admin's question into a
 restricted set of supported database queries. The service verifies the admin,
 reads the relevant Firestore collections, and formats the answer itself; it
