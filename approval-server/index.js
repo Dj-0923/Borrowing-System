@@ -488,12 +488,8 @@ async function rejectAccountRequest(data) {
     }
   }
 
-  await requestRef.update({
-    authAccountDeleted: true,
-    authAccountDeletedAt: Date.now(),
-    updatedAt: Date.now(),
-  });
-  return { success: true };
+  await requestRef.delete();
+  return { success: true, requestDeleted: true };
 }
 
 async function deleteAccount(data, adminUid) {

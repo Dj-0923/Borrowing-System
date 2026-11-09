@@ -154,10 +154,11 @@ stopped; open the app again to resume them.
 - If email delivery fails, the account is still approved and the dashboard
   shows a resend action under **Requests & accounts → Accounts**. Resending
   generates a new temporary password and invalidates the previous one.
-- When an admin rejects a request, the approval service also removes that
-  request's Firebase Authentication account so the requester can register
-  again with the same email. Older rejected requests can be cleaned up from
-  **Requests & accounts → Accounts → Allow new request**.
+- When an admin rejects a request, the approval service removes both the
+  request's Firebase Authentication account and its Firestore request
+  document, so the requester can register again with the same email. Any older
+  rejected requests can be cleaned up from **Requests & accounts → Accounts →
+  Allow new request**.
 
 Firestore rules allow only the requester and admins to read account requests.
 The mobile app must remain signed in to show request status. Closing and
