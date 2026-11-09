@@ -549,17 +549,29 @@
         request.credentialEmailStatus !== 'sent' &&
         account && account.mustChangePassword === true;
     });
+    var rejectedRequests = db.accountRequests.filter(function (request) {
+      return request.status === 'rejected' &&
+        request.authUid &&
+        request.authAccountDeleted !== true;
+    });
+    var notices = (failedEmails.length ? '<div class="border-b border-line bg-amber-50 px-4 py-3"><p class="text-sm font-semibold text-amber-900">Password email not sent</p>' +
+      '<p class="text-xs text-amber-800 mt-1">Check the email settings on the approval service, then resend.</p>' +
+      failedEmails.map(function (request) {
+        return '<div class="mt-2 flex items-center justify-between gap-3 text-sm"><span class="truncate">' + esc(request.name) + ' · ' + esc(request.email) + '</span>' +
+          '<button class="btn btn-primary btn-sm shrink-0" data-action="resend-account-password" data-id="' + esc(request.id) + '">Resend password</button></div>';
+      }).join('') + '</div>' : '') +
+      (rejectedRequests.length ? '<div class="border-b border-line bg-amber-50 px-4 py-3"><p class="text-sm font-semibold text-amber-900">Rejected requests need sign-in cleanup</p>' +
+        '<p class="text-xs text-amber-800 mt-1">Remove these old sign-in accounts so users can submit a new request with the same email.</p>' +
+        rejectedRequests.map(function (request) {
+          return '<div class="mt-2 flex items-center justify-between gap-3 text-sm"><span class="truncate">' + esc(request.name) + ' · ' + esc(request.email) + '</span>' +
+            '<button class="btn btn-primary btn-sm shrink-0" data-action="cleanup-rejected-request" data-id="' + esc(request.id) + '">Allow new request</button></div>';
+        }).join('') + '</div>' : '');
     if (!list.length) {
-      return emptyState('userplus', 'No accounts yet', 'Approve a pending request and it will show up here as an active account.');
+      return notices + emptyState('userplus', 'No accounts yet', 'Approve a pending request and it will show up here as an active account.');
     }
     var C = 'grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.6fr)_110px_44px]';
     return '<div class="overflow-x-auto rounded-2xl shadow-soft"><div class="min-w-[680px] rounded-2xl border border-line bg-card overflow-hidden">' +
-      (failedEmails.length ? '<div class="border-b border-line bg-amber-50 px-4 py-3"><p class="text-sm font-semibold text-amber-900">Password email not sent</p>' +
-        '<p class="text-xs text-amber-800 mt-1">Check the email settings on the approval service, then resend.</p>' +
-        failedEmails.map(function (request) {
-          return '<div class="mt-2 flex items-center justify-between gap-3 text-sm"><span class="truncate">' + esc(request.name) + ' · ' + esc(request.email) + '</span>' +
-            '<button class="btn btn-primary btn-sm shrink-0" data-action="resend-account-password" data-id="' + esc(request.id) + '">Resend password</button></div>';
-        }).join('') + '</div>' : '') +
+      notices +
       '<div class="grid ' + C + ' gap-3 px-4 py-3 bg-head text-[13px] font-bold"><span>Name</span><span>Role</span><span>Email</span><span>Status</span><span></span></div>' +
       list.map(function (a) {
         return '<div class="grid ' + C + ' gap-3 px-4 py-3.5 items-center text-[13px] border-t border-line">' +
@@ -1001,9 +1013,56 @@
   function rejectRequest(id) {
     var r = db.accountRequests.find(function (x) { return x.id === id; });
     if (!r || r.status !== 'pending') return;
-    requestsCol.doc(id).update({ status: 'rejected', updatedAt: Date.now() })
-      .then(function () { toast('Rejected the request from ' + r.name + '.'); })
+    var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
+    if (!endpoint) {
+      toast('The account approval service URL is not configured. Follow FIREBASE_SETUP.md.', 'bad');
+      return;
+    }
+    auth.currentUser.getIdToken()
+      .then(function (idToken) {
+        return fetch(endpoint + '/reject-account', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + idToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ requestId: id })
+        });
+      })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body.error || 'Approval service returned HTTP ' + response.status + '.');
+          return body;
+        });
+      })
+      .then(function () { toast('Rejected ' + r.name + '\'s request. The email can now be used for a new request.'); })
       .catch(fail('Could not reject the request'));
+  }
+  function cleanupRejectedRequest(requestId) {
+    var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
+    if (!endpoint) {
+      toast('The account approval service URL is not configured. Follow FIREBASE_SETUP.md.', 'bad');
+      return;
+    }
+    auth.currentUser.getIdToken()
+      .then(function (idToken) {
+        return fetch(endpoint + '/reject-account', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + idToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ requestId: requestId })
+        });
+      })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body.error || 'Approval service returned HTTP ' + response.status + '.');
+          return body;
+        });
+      })
+      .then(function () { toast('Removed the old sign-in account. The email can now be used for a new request.'); })
+      .catch(fail('Could not clean up the rejected request'));
   }
   function setAccountStatus(id, statusValue) {
     var a = db.accounts.find(function (x) { return x.id === id; });
@@ -1174,7 +1233,7 @@
       '<form data-form="approve-account" data-request-id="' + esc(request.id) + '" novalidate class="mt-5 grid gap-4">' +
       '<p id="form-error" class="text-sm t-bad min-h-[1.25rem]" role="alert"></p>' +
       '<div class="flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button>' +
-      '<button type="submit" class="btn btn-primary">Approve and email password</button></div></form>';
+      '<button type="submit" class="btn btn-primary">Approve</button></div></form>';
   }
   function itemUrl(id) {
     // item.html lives next to index.html, so this works wherever the app is hosted.
@@ -1768,6 +1827,7 @@
       case 'approve-request': approveRequest(id); break;
       case 'reject-request': rejectRequest(id); break;
       case 'resend-account-password': resendTemporaryPassword(id); break;
+      case 'cleanup-rejected-request': cleanupRejectedRequest(id); break;
       case 'requests-tab': state.tab.requests = el.dataset.tab; render(); break;
       case 'open-account': openModal({ type: 'account', id: id }); break;
       case 'users-role': state.filter.usersRole = el.dataset.value; render(); break;

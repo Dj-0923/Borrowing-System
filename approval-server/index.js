@@ -207,6 +207,15 @@ async function sendTemporaryPassword(accountRequest, requestId) {
       );
     }
     await auth.updateUser(user.uid, { password: temporaryPassword });
+    await db
+      .collection("accountRequests")
+      .doc(requestId)
+      .collection("privateCredentials")
+      .doc("temporary")
+      .set({
+        temporaryPassword,
+        createdAt: Date.now(),
+      });
     await transporter.sendMail({
       from: `Lendy <${sender}>`,
       to: email,
@@ -230,7 +239,7 @@ async function sendTemporaryPassword(accountRequest, requestId) {
     });
     throw new HttpError(
       502,
-      "The account was approved, but its temporary password could not be emailed. Use the resend action to try again.",
+      "The account was approved, but the password email could not be sent. The requester can use the in-app password if it is available; use the resend action to try again.",
     );
   }
 }
@@ -423,6 +432,68 @@ async function resendTemporaryPassword(data) {
     credentialsEmailedAt: Date.now(),
   });
   return { success: true, emailSent: true };
+}
+
+async function rejectAccountRequest(data) {
+  const requestId = data && data.requestId;
+  if (
+    typeof requestId !== "string" ||
+    !/^[A-Za-z0-9_-]{1,150}$/.test(requestId)
+  ) {
+    throw new HttpError(400, "A valid account request ID is required.");
+  }
+
+  const requestRef = db.collection("accountRequests").doc(requestId);
+  const requestSnapshot = await requestRef.get();
+  if (!requestSnapshot.exists) {
+    throw new HttpError(404, "The account request could not be found.");
+  }
+  const request = requestSnapshot.data();
+  if (!["pending", "rejected"].includes(request.status)) {
+    throw new HttpError(409, "Only pending or previously rejected requests can be rejected.");
+  }
+  if (request.authAccountDeleted === true) {
+    throw new HttpError(409, "This request's sign-in account was already removed.");
+  }
+
+  if (request.status === "pending") {
+    await db.runTransaction(async (transaction) => {
+      const latestRequest = await transaction.get(requestRef);
+      if (!latestRequest.exists || latestRequest.data().status !== "pending") {
+        throw new HttpError(409, "This account request is no longer pending.");
+      }
+      transaction.update(requestRef, {
+        status: "rejected",
+        authAccountDeleted: false,
+        updatedAt: Date.now(),
+      });
+    });
+  }
+
+  if (typeof request.authUid === "string" && request.authUid) {
+    try {
+      await auth.deleteUser(request.authUid);
+    } catch (error) {
+      if (error.code !== "auth/user-not-found") {
+        console.error("Could not remove the rejected request's sign-in account.", {
+          requestId,
+          authUid: request.authUid,
+          error: error.message,
+        });
+        throw new HttpError(
+          502,
+          "The request was rejected, but its sign-in account could not be removed. Retry the cleanup from Requests & accounts.",
+        );
+      }
+    }
+  }
+
+  await requestRef.update({
+    authAccountDeleted: true,
+    authAccountDeletedAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+  return { success: true };
 }
 
 async function deleteAccount(data, adminUid) {
@@ -1078,6 +1149,7 @@ const server = http.createServer(async (request, response) => {
     ![
       "/approve-account",
       "/resend-account-password",
+      "/reject-account",
       "/delete-account",
       "/assistant",
     ].includes(request.url)
@@ -1093,6 +1165,8 @@ const server = http.createServer(async (request, response) => {
       ? await approveRequest(data)
       : request.url === "/resend-account-password"
         ? await resendTemporaryPassword(data)
+      : request.url === "/reject-account"
+        ? await rejectAccountRequest(data)
       : request.url === "/delete-account"
         ? await deleteAccount(data, adminUid)
         : await answerAssistant(data, adminUid);

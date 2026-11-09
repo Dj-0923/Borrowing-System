@@ -3,10 +3,12 @@
 The account approval flow uses a separately hosted Node.js service and the
 Firebase Admin SDK to generate a temporary password, activate the account, and
 email the password to the address on the approved request. The password is not
-stored in Firestore or returned to the dashboard. The user must change it after
-the first sign-in. Gmail SMTP is used for email delivery; this does not need
-Resend or Cloud Functions. Push notifications are handled separately by the
-Firebase Cloud Functions described below.
+stored on the request document or returned to the dashboard. A temporary copy
+is kept in a requester-only Firestore subcollection so the signed-in requester
+can also see it in the mobile app; it is deleted after the password is changed.
+The user must change it after the first sign-in. Gmail SMTP is used for email
+delivery; this does not need Resend or Cloud Functions. Push notifications are
+handled separately by the Firebase Cloud Functions described below.
 
 ## Configure Firebase
 
@@ -140,15 +142,22 @@ stopped; open the app again to resume them.
 - The admin approves the request. The service generates a random temporary
   password, activates the account, marks `mustChangePassword: true`, and emails
   the password to the same email address used by its Firebase Authentication
-  account.
-- The mobile app confirms that the password was emailed; it does not display
-  or store the password. The requester signs in with the emailed password.
+  account. It also stores a temporary copy in a requester-only document, not
+  on the account request itself.
+- The mobile app displays the password to the signed-in requester, who can copy
+  it there or use the emailed copy to sign in.
 - The first successful sign-in opens **Set new password** before the
   homepage. Returning users who already changed their password go straight to
   the homepage.
+- After the new password is set, the app deletes the requester-only temporary
+  credential document.
 - If email delivery fails, the account is still approved and the dashboard
   shows a resend action under **Requests & accounts → Accounts**. Resending
   generates a new temporary password and invalidates the previous one.
+- When an admin rejects a request, the approval service also removes that
+  request's Firebase Authentication account so the requester can register
+  again with the same email. Older rejected requests can be cleaned up from
+  **Requests & accounts → Accounts → Allow new request**.
 
 Firestore rules allow only the requester and admins to read account requests.
 The mobile app must remain signed in to show request status. Closing and

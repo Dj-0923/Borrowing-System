@@ -163,6 +163,30 @@ service cloud.firestore {
             'temporaryPassword'
           ]));
       allow delete: if isAdmin();
+
+      match /privateCredentials/{credentialId} {
+        function parentRequest() {
+          return get(/databases/$(database)/documents/accountRequests/$(requestId)).data;
+        }
+
+        function requesterAccount() {
+          return get(/databases/$(database)/documents/accounts/$(request.auth.uid)).data;
+        }
+
+        allow read: if signedIn()
+          && credentialId == 'temporary'
+          && !isAdmin()
+          && parentRequest().authUid == request.auth.uid
+          && parentRequest().status == 'approved'
+          && requesterAccount().status == 'active'
+          && requesterAccount().mustChangePassword == true;
+        allow delete: if signedIn()
+          && credentialId == 'temporary'
+          && !isAdmin()
+          && parentRequest().authUid == request.auth.uid
+          && requesterAccount().status == 'active'
+          && requesterAccount().mustChangePassword == false;
+      }
     }
     match /accounts/{accountId} {
       allow read: if isAdmin()
