@@ -457,25 +457,31 @@ async function rejectAccountRequest(data) {
     throw new HttpError(409, "Only pending or previously rejected requests can be rejected.");
   }
 
-  let authAccountDeleted = true;
   if (typeof request.authUid === "string" && request.authUid) {
     try {
       await auth.deleteUser(request.authUid);
     } catch (error) {
       if (error.code !== "auth/user-not-found") {
-        authAccountDeleted = false;
         console.error("Could not remove the rejected request's sign-in account.", {
           requestId,
           authUid: request.authUid,
           error: error.message,
         });
+        throw new HttpError(
+          502,
+          "The sign-in account could not be removed, so the request was kept for cleanup. Retry the rejection.",
+        );
       }
     }
   }
 
-  const credentials = await requestRef
-    .collection("privateCredentials")
-    .get();
+  await deleteRequestCredentials(requestRef);
+  await requestRef.delete();
+  return { success: true, requestDeleted: true, authAccountDeleted: true };
+}
+
+async function deleteRequestCredentials(requestRef) {
+  const credentials = await requestRef.collection("privateCredentials").get();
   for (let offset = 0; offset < credentials.docs.length; offset += 400) {
     const batch = db.batch();
     credentials.docs.slice(offset, offset + 400).forEach((credential) => {
@@ -483,8 +489,81 @@ async function rejectAccountRequest(data) {
     });
     await batch.commit();
   }
-  await requestRef.delete();
-  return { success: true, requestDeleted: true, authAccountDeleted };
+}
+
+async function cleanupOrphanedSignIn(data) {
+  const email = typeof data?.email === "string"
+    ? data.email.trim().toLowerCase()
+    : "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpError(400, "Enter a valid email address.");
+  }
+
+  const [accounts, requests] = await Promise.all([
+    db.collection("accounts").where("email", "==", email).limit(2).get(),
+    db.collection("accountRequests").where("email", "==", email).get(),
+  ]);
+  if (!accounts.empty) {
+    throw new HttpError(
+      409,
+      "This email belongs to an existing account and cannot be cleared as an orphan.",
+    );
+  }
+  const blockedRequest = requests.docs.find(
+    (document) => document.data().status !== "rejected",
+  );
+  if (blockedRequest) {
+    throw new HttpError(
+      409,
+      "This email has a non-rejected account request. Resolve that request first.",
+    );
+  }
+
+  let user;
+  try {
+    user = await auth.getUserByEmail(email);
+  } catch (error) {
+    if (error.code === "auth/user-not-found") {
+      for (const request of requests.docs) {
+        await deleteRequestCredentials(request.ref);
+        await request.ref.delete();
+      }
+      return { success: true, alreadyClean: true };
+    }
+    console.error("Could not find the orphaned sign-in account.", {
+      email,
+      error: error.message,
+    });
+    throw new HttpError(502, "Could not verify the sign-in account.");
+  }
+
+  for (const request of requests.docs) {
+    if (
+      typeof request.data().authUid === "string" &&
+      request.data().authUid !== user.uid
+    ) {
+      throw new HttpError(
+        409,
+        "A rejected request for this email is linked to a different sign-in account.",
+      );
+    }
+  }
+
+  try {
+    await auth.deleteUser(user.uid);
+  } catch (error) {
+    console.error("Could not remove the orphaned sign-in account.", {
+      email,
+      authUid: user.uid,
+      error: error.message,
+    });
+    throw new HttpError(502, "Could not remove the sign-in account.");
+  }
+  for (const request of requests.docs) {
+    await deleteRequestCredentials(request.ref);
+    await request.ref.delete();
+  }
+  return { success: true, authAccountDeleted: true, requestDeleted: true };
 }
 
 async function deleteAccount(data, adminUid) {
@@ -1141,6 +1220,7 @@ const server = http.createServer(async (request, response) => {
       "/approve-account",
       "/resend-account-password",
       "/reject-account",
+      "/cleanup-orphaned-sign-in",
       "/delete-account",
       "/assistant",
     ].includes(request.url)
@@ -1158,6 +1238,8 @@ const server = http.createServer(async (request, response) => {
         ? await resendTemporaryPassword(data)
       : request.url === "/reject-account"
         ? await rejectAccountRequest(data)
+      : request.url === "/cleanup-orphaned-sign-in"
+        ? await cleanupOrphanedSignIn(data)
       : request.url === "/delete-account"
         ? await deleteAccount(data, adminUid)
         : await answerAssistant(data, adminUid);

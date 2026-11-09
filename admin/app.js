@@ -551,7 +551,13 @@
         request.credentialEmailStatus !== 'sent' &&
         account && account.mustChangePassword === true;
     });
-    var notices = (failedEmails.length ? '<div class="border-b border-line bg-amber-50 px-4 py-3"><p class="text-sm font-semibold text-amber-900">Password email not sent</p>' +
+    var cleanupSignIn = '<form data-form="cleanup-orphaned-sign-in" class="border-b border-line bg-amber-50 px-4 py-3">' +
+      '<p class="text-sm font-semibold text-amber-900">Email still says already in use?</p>' +
+      '<p class="text-xs text-amber-800 mt-1">A rejected request can leave a sign-in record even when no user appears below. Enter that email to remove the orphaned sign-in account.</p>' +
+      '<div class="mt-2 flex flex-wrap items-center gap-2">' +
+      '<input class="field min-w-[220px] flex-1" type="email" name="email" placeholder="user@gmail.com" required autocomplete="email">' +
+      '<button class="btn btn-primary btn-sm shrink-0" type="submit">Clear rejected sign-in</button></div></form>';
+    var notices = cleanupSignIn + (failedEmails.length ? '<div class="border-b border-line bg-amber-50 px-4 py-3"><p class="text-sm font-semibold text-amber-900">Password email not sent</p>' +
       '<p class="text-xs text-amber-800 mt-1">Check the email settings on the approval service, then resend.</p>' +
       failedEmails.map(function (request) {
         return '<div class="mt-2 flex items-center justify-between gap-3 text-sm"><span class="truncate">' + esc(request.name) + ' · ' + esc(request.email) + '</span>' +
@@ -1073,6 +1079,38 @@
       })
       .catch(fail('Could not remove a rejected request'))
       .finally(function () { rejectedCleanupInFlight.delete(requestId); });
+  }
+  function cleanupOrphanedSignIn(email) {
+    var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
+    if (!endpoint) {
+      toast('The account approval service URL is not configured. Follow FIREBASE_SETUP.md.', 'bad');
+      return;
+    }
+    auth.currentUser.getIdToken()
+      .then(function (idToken) {
+        return fetch(endpoint + '/cleanup-orphaned-sign-in', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + idToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ email: email })
+        });
+      })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body.error || 'Approval service returned HTTP ' + response.status + '.');
+          return body;
+        });
+      })
+      .then(function (result) {
+        if (result.alreadyClean) {
+          toast('No orphaned sign-in account remains for ' + email + '.');
+        } else {
+          toast('Removed the orphaned sign-in account for ' + email + '. The user can submit a new request.');
+        }
+      })
+      .catch(fail('Could not clear the rejected sign-in account'));
   }
   function setAccountStatus(id, statusValue) {
     var a = db.accounts.find(function (x) { return x.id === id; });
@@ -1944,6 +1982,18 @@
     else if (form.dataset.form === 'edit-equipment') submitEditEquipment(form);
     else if (form.dataset.form === 'approve-account') submitApproveRequest(form);
     else if (form.dataset.form === 'edit-profile') submitEditProfile(form);
+    else if (form.dataset.form === 'cleanup-orphaned-sign-in') {
+      var email = String(form.elements.email.value || '').trim().toLowerCase();
+      if (!email) return form.elements.email.focus();
+      pendingConfirm = function () { cleanupOrphanedSignIn(email); };
+      openModal({
+        type: 'confirm',
+        title: 'Clear this rejected sign-in?',
+        body: 'This removes the Firebase sign-in account for ' + email + ' only if no active user or pending/approved request uses that email.',
+        label: 'Clear sign-in',
+        danger: true
+      });
+    }
     else if (form.id === 'assistant-form') submitAssistant(form);
   });
   document.addEventListener('keydown', function (ev) {
