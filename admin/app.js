@@ -108,6 +108,7 @@
   var db = { equipment: [], loans: [], profile: null, accountRequests: [], accounts: [] };
   var loaded = { equipment: false, loans: false, profile: false, accountRequests: false, accounts: false };
   var syncError = null;
+  var rejectedCleanupInFlight = new Set();
 
   function allLoaded() { return loaded.equipment && loaded.loans && loaded.profile && loaded.accountRequests && loaded.accounts; }
 
@@ -117,6 +118,7 @@
         return Object.assign({}, d.data(), { id: d.id });
       });
       loaded[key] = true; syncError = null;
+      if (key === 'accountRequests') cleanupLegacyRejectedRequests();
       if (allLoaded()) render();
     }, function (err) {
       syncError = err; render();
@@ -549,23 +551,12 @@
         request.credentialEmailStatus !== 'sent' &&
         account && account.mustChangePassword === true;
     });
-    var rejectedRequests = db.accountRequests.filter(function (request) {
-      return request.status === 'rejected' &&
-        request.authUid &&
-        request.authAccountDeleted !== true;
-    });
     var notices = (failedEmails.length ? '<div class="border-b border-line bg-amber-50 px-4 py-3"><p class="text-sm font-semibold text-amber-900">Password email not sent</p>' +
       '<p class="text-xs text-amber-800 mt-1">Check the email settings on the approval service, then resend.</p>' +
       failedEmails.map(function (request) {
         return '<div class="mt-2 flex items-center justify-between gap-3 text-sm"><span class="truncate">' + esc(request.name) + ' · ' + esc(request.email) + '</span>' +
           '<button class="btn btn-primary btn-sm shrink-0" data-action="resend-account-password" data-id="' + esc(request.id) + '">Resend password</button></div>';
-      }).join('') + '</div>' : '') +
-      (rejectedRequests.length ? '<div class="border-b border-line bg-amber-50 px-4 py-3"><p class="text-sm font-semibold text-amber-900">Rejected requests need sign-in cleanup</p>' +
-        '<p class="text-xs text-amber-800 mt-1">Remove these old sign-in accounts so users can submit a new request with the same email.</p>' +
-        rejectedRequests.map(function (request) {
-          return '<div class="mt-2 flex items-center justify-between gap-3 text-sm"><span class="truncate">' + esc(request.name) + ' · ' + esc(request.email) + '</span>' +
-            '<button class="btn btn-primary btn-sm shrink-0" data-action="cleanup-rejected-request" data-id="' + esc(request.id) + '">Allow new request</button></div>';
-        }).join('') + '</div>' : '');
+      }).join('') + '</div>' : '');
     if (!list.length) {
       return notices + emptyState('userplus', 'No accounts yet', 'Approve a pending request and it will show up here as an active account.');
     }
@@ -1035,12 +1026,26 @@
           return body;
         });
       })
-      .then(function () { toast('Rejected ' + r.name + '\'s request. The email can now be used for a new request.'); })
+      .then(function (result) {
+        if (result.authAccountDeleted === false) {
+          toast('Removed the rejected request, but its sign-in account could not be deleted. The email may still be in use.', 'bad');
+          return;
+        }
+        toast('Rejected ' + r.name + '\'s request. The request data was removed, and the email can be used again.');
+      })
       .catch(fail('Could not reject the request'));
   }
+  function cleanupLegacyRejectedRequests() {
+    db.accountRequests.forEach(function (request) {
+      if (request.status === 'rejected') cleanupRejectedRequest(request.id);
+    });
+  }
   function cleanupRejectedRequest(requestId) {
+    if (rejectedCleanupInFlight.has(requestId)) return;
+    rejectedCleanupInFlight.add(requestId);
     var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
     if (!endpoint) {
+      rejectedCleanupInFlight.delete(requestId);
       toast('The account approval service URL is not configured. Follow FIREBASE_SETUP.md.', 'bad');
       return;
     }
@@ -1061,8 +1066,13 @@
           return body;
         });
       })
-      .then(function () { toast('Removed the old sign-in account. The email can now be used for a new request.'); })
-      .catch(fail('Could not clean up the rejected request'));
+      .then(function (result) {
+        if (result.authAccountDeleted === false) {
+          toast('Removed a rejected request, but its sign-in account could not be deleted. The email may still be in use.', 'bad');
+        }
+      })
+      .catch(fail('Could not remove a rejected request'))
+      .finally(function () { rejectedCleanupInFlight.delete(requestId); });
   }
   function setAccountStatus(id, statusValue) {
     var a = db.accounts.find(function (x) { return x.id === id; });
@@ -1827,7 +1837,6 @@
       case 'approve-request': approveRequest(id); break;
       case 'reject-request': rejectRequest(id); break;
       case 'resend-account-password': resendTemporaryPassword(id); break;
-      case 'cleanup-rejected-request': cleanupRejectedRequest(id); break;
       case 'requests-tab': state.tab.requests = el.dataset.tab; render(); break;
       case 'open-account': openModal({ type: 'account', id: id }); break;
       case 'users-role': state.filter.usersRole = el.dataset.value; render(); break;

@@ -456,44 +456,35 @@ async function rejectAccountRequest(data) {
   if (!["pending", "rejected"].includes(request.status)) {
     throw new HttpError(409, "Only pending or previously rejected requests can be rejected.");
   }
-  if (request.authAccountDeleted === true) {
-    throw new HttpError(409, "This request's sign-in account was already removed.");
-  }
 
-  if (request.status === "pending") {
-    await db.runTransaction(async (transaction) => {
-      const latestRequest = await transaction.get(requestRef);
-      if (!latestRequest.exists || latestRequest.data().status !== "pending") {
-        throw new HttpError(409, "This account request is no longer pending.");
-      }
-      transaction.update(requestRef, {
-        status: "rejected",
-        authAccountDeleted: false,
-        updatedAt: Date.now(),
-      });
-    });
-  }
-
+  let authAccountDeleted = true;
   if (typeof request.authUid === "string" && request.authUid) {
     try {
       await auth.deleteUser(request.authUid);
     } catch (error) {
       if (error.code !== "auth/user-not-found") {
+        authAccountDeleted = false;
         console.error("Could not remove the rejected request's sign-in account.", {
           requestId,
           authUid: request.authUid,
           error: error.message,
         });
-        throw new HttpError(
-          502,
-          "The request was rejected, but its sign-in account could not be removed. Retry the cleanup from Requests & accounts.",
-        );
       }
     }
   }
 
+  const credentials = await requestRef
+    .collection("privateCredentials")
+    .get();
+  for (let offset = 0; offset < credentials.docs.length; offset += 400) {
+    const batch = db.batch();
+    credentials.docs.slice(offset, offset + 400).forEach((credential) => {
+      batch.delete(credential.ref);
+    });
+    await batch.commit();
+  }
   await requestRef.delete();
-  return { success: true, requestDeleted: true };
+  return { success: true, requestDeleted: true, authAccountDeleted };
 }
 
 async function deleteAccount(data, adminUid) {
