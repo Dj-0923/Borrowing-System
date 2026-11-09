@@ -180,12 +180,12 @@ service cloud.firestore {
           && parentRequest().status == 'approved'
           && requesterAccount().status == 'active'
           && requesterAccount().mustChangePassword == true;
-        allow delete: if signedIn()
-          && credentialId == 'temporary'
-          && !isAdmin()
-          && parentRequest().authUid == request.auth.uid
-          && requesterAccount().status == 'active'
-          && requesterAccount().mustChangePassword == false;
+        allow delete: if isAdmin()
+          || (signedIn()
+            && credentialId == 'temporary'
+            && parentRequest().authUid == request.auth.uid
+            && requesterAccount().status == 'active'
+            && requesterAccount().mustChangePassword == false);
       }
     }
     match /accounts/{accountId} {

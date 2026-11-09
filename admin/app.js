@@ -1043,42 +1043,20 @@
   }
   function cleanupLegacyRejectedRequests() {
     db.accountRequests.forEach(function (request) {
-      if (request.status === 'rejected') cleanupRejectedRequest(request.id);
+      if (request.status !== 'rejected' || rejectedCleanupInFlight.has(request.id)) return;
+      rejectedCleanupInFlight.add(request.id);
+      var requestRef = requestsCol.doc(request.id);
+      var batch = fsdb.batch();
+      batch.delete(requestRef.collection('privateCredentials').doc('temporary'));
+      batch.delete(requestRef);
+      batch.commit()
+        .catch(function (error) {
+          toast('Could not remove rejected request data: ' + error.message, 'bad');
+        })
+        .finally(function () {
+          rejectedCleanupInFlight.delete(request.id);
+        });
     });
-  }
-  function cleanupRejectedRequest(requestId) {
-    if (rejectedCleanupInFlight.has(requestId)) return;
-    rejectedCleanupInFlight.add(requestId);
-    var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
-    if (!endpoint) {
-      rejectedCleanupInFlight.delete(requestId);
-      toast('The account approval service URL is not configured. Follow FIREBASE_SETUP.md.', 'bad');
-      return;
-    }
-    auth.currentUser.getIdToken()
-      .then(function (idToken) {
-        return fetch(endpoint + '/reject-account', {
-          method: 'POST',
-          headers: {
-            Authorization: 'Bearer ' + idToken,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ requestId: requestId })
-        });
-      })
-      .then(function (response) {
-        return response.json().then(function (body) {
-          if (!response.ok) throw new Error(body.error || 'Approval service returned HTTP ' + response.status + '.');
-          return body;
-        });
-      })
-      .then(function (result) {
-        if (result.authAccountDeleted === false) {
-          toast('Removed a rejected request, but its sign-in account could not be deleted. The email may still be in use.', 'bad');
-        }
-      })
-      .catch(fail('Could not remove a rejected request'))
-      .finally(function () { rejectedCleanupInFlight.delete(requestId); });
   }
   function cleanupOrphanedSignIn(email) {
     var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
