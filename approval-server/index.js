@@ -5,7 +5,6 @@ const { createHash, randomBytes, timingSafeEqual } = require("node:crypto");
 const http = require("node:http");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const nodemailer = require("nodemailer");
 
 const port = Number(process.env.PORT || 8080);
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -65,7 +64,6 @@ initializeApp({
 
 const auth = getAuth();
 const db = getFirestore();
-let emailTransporter;
 
 class HttpError extends Error {
   constructor(status, message, code) {
@@ -176,24 +174,93 @@ async function requireAdmin(request) {
   return decodedToken.uid;
 }
 
-function getEmailTransporter() {
+function getEmailSenderConfig() {
   const email = (process.env.EMAIL_USER || "").trim();
-  const appPassword = (process.env.EMAIL_APP_PASSWORD || "").replace(/\s/g, "");
-  if (!email || !appPassword) {
+  const scriptUrl = (process.env.GMAIL_APPS_SCRIPT_URL || "").trim();
+  const senderToken = (process.env.GMAIL_SENDER_TOKEN || "").trim();
+  if (!email || !scriptUrl || !senderToken) {
     throw new HttpError(
       503,
-      "Email delivery is not configured. Set EMAIL_USER and EMAIL_APP_PASSWORD on the approval service.",
+      "Email delivery is not configured. Set EMAIL_USER, GMAIL_APPS_SCRIPT_URL, and GMAIL_SENDER_TOKEN on the approval service.",
     );
   }
-  if (!emailTransporter) {
-    emailTransporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 465,
-      secure: true,
-      auth: { user: email, pass: appPassword },
-    });
+  if (!isValidEmail(email) || senderToken.length < 40) {
+    throw new HttpError(
+      503,
+      "The configured Gmail sender email or sender token is invalid.",
+    );
   }
-  return { email, transporter: emailTransporter };
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(scriptUrl);
+  } catch {
+    throw new HttpError(503, "GMAIL_APPS_SCRIPT_URL must be a valid HTTPS URL.");
+  }
+  if (
+    parsedUrl.protocol !== "https:" ||
+    parsedUrl.hostname !== "script.google.com" ||
+    !parsedUrl.pathname.includes("/macros/s/") ||
+    !parsedUrl.pathname.endsWith("/exec")
+  ) {
+    throw new HttpError(503, "GMAIL_APPS_SCRIPT_URL must be a deployed Google Apps Script /exec URL.");
+  }
+  return { email, scriptUrl, senderToken };
+}
+
+async function sendEmailWithGmailScript({
+  scriptUrl,
+  senderToken,
+  senderEmail,
+  to,
+  subject,
+  text,
+}) {
+  let response;
+  try {
+    response = await fetch(scriptUrl, {
+      method: "POST",
+      redirect: "manual",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: senderToken,
+        senderEmail,
+        to,
+        subject,
+        text,
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) {
+        throw new Error("The Gmail sender returned a redirect without a destination.");
+      }
+      response = await fetch(new URL(location, scriptUrl), {
+        method: "GET",
+        redirect: "error",
+        signal: AbortSignal.timeout(20000),
+      });
+    }
+  } catch (error) {
+    console.error("Could not reach the Gmail Apps Script sender.", {
+      error: error.message,
+    });
+    throw new HttpError(502, "Could not connect to the Gmail email sender.");
+  }
+
+  let result;
+  try {
+    result = await response.json();
+  } catch {
+    throw new HttpError(502, "The Gmail email sender returned an invalid response.");
+  }
+  if (!response.ok || result.success !== true) {
+    console.error("Gmail Apps Script could not send the message.", {
+      status: response.status,
+      error: typeof result.error === "string" ? result.error : "Unknown sender error.",
+    });
+    throw new HttpError(502, "Gmail could not send the temporary password email.");
+  }
 }
 
 function normalizedEmail(value) {
@@ -407,15 +474,17 @@ async function sendTemporaryPassword(accountRequest, requestId, user, temporaryP
   if (!isValidEmail(email)) {
     throw new HttpError(409, "The account request has an invalid email.");
   }
-  const { email: sender, transporter } = getEmailTransporter();
+  const senderConfig = getEmailSenderConfig();
   await auth.updateUser(user.uid, { password: temporaryPassword });
   const requestRef = db.collection("accountRequests").doc(requestId);
   await requestRef.collection("privateCredentials").doc("temporary").set({
     temporaryPassword,
     createdAt: Date.now(),
   });
-  await transporter.sendMail({
-    from: `Lendy <${sender}>`,
+  await sendEmailWithGmailScript({
+    scriptUrl: senderConfig.scriptUrl,
+    senderToken: senderConfig.senderToken,
+    senderEmail: senderConfig.email,
     to: email,
     subject: "Your Lendy account is approved",
     text: [
@@ -438,7 +507,7 @@ async function approveRequest(data) {
   ) {
     throw new HttpError(400, "A valid account request ID is required.");
   }
-  getEmailTransporter();
+  getEmailSenderConfig();
 
   const requestRef = db.collection("accountRequests").doc(requestId);
   const requestSnapshot = await requestRef.get();

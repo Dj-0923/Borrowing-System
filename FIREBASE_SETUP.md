@@ -5,9 +5,9 @@ Firebase Admin SDK. Submitting a request creates a pending Firestore request,
 but does not create a Firebase Authentication user. Only after admin approval
 does the service create the sign-in account, generate a temporary password,
 and email it to the requester. The approval is rolled back if the email cannot
-be sent. Gmail SMTP is used for email delivery; this does not need Resend or
-Cloud Functions. Push notifications are handled separately by the Firebase
-Cloud Functions described below.
+be sent. Email is sent by a small Google Apps Script web app using Gmail over
+HTTPS, so the Render Free service does not need SMTP access. Push notifications
+are handled separately by the Firebase Cloud Functions described below.
 
 ## Configure Firebase
 
@@ -54,8 +54,9 @@ The repository includes a Render Blueprint in `render.yaml`.
    | `FIREBASE_SERVICE_ACCOUNT_JSON` | The complete JSON for a Firebase service-account key |
    | `GEMINI_API_KEY` | A Gemini API key from Google AI Studio |
    | `ALLOWED_ORIGINS` | The exact admin dashboard origin(s), comma-separated, with no trailing slash |
-   | `EMAIL_USER` | The Gmail address that will send account emails |
-   | `EMAIL_APP_PASSWORD` | A Google App Password for that Gmail account |
+   | `EMAIL_USER` | The Gmail address owned by the Apps Script sender |
+   | `GMAIL_APPS_SCRIPT_URL` | The deployed Apps Script web app URL ending in `/exec` |
+   | `GMAIL_SENDER_TOKEN` | A random secret shared with the Apps Script project |
 
 4. To create the service-account key, open Firebase Console → **Project
    settings → Service accounts → Generate new private key**. Store the
@@ -77,14 +78,40 @@ The repository includes a Render Blueprint in `render.yaml`.
    `window.LENDY_APPROVAL_API_URL` to the service URL without a trailing slash,
    then publish the updated admin dashboard.
 
-To create the Gmail App Password, enable 2-Step Verification on the sending
-Google account, then create an App Password in that Google account's security
-settings. Put the 16-character App Password in Render as `EMAIL_APP_PASSWORD`;
-do not use the account's normal Gmail password. Keep both email values only in
-Render's environment settings, never in source code or `admin/firebase-config.js`.
-If the Render service already exists, add both values under that service's
-**Environment** settings and redeploy. The approval service uses Gmail's
-authenticated SMTP endpoint over TLS.
+### Configure free Gmail sending
+
+1. Sign in to [Google Apps Script](https://script.google.com/) with the Gmail
+   account that should send the temporary-password messages and create a
+   project.
+2. Replace the starter code with the contents of
+   `approval-server/gmail-sender.gs`, then save the project.
+3. Generate a long random token locally, for example:
+
+   ```powershell
+   node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+   ```
+
+   Keep the output private. In Apps Script **Project Settings → Script
+   Properties**, add `LENDY_SENDER_TOKEN` with this value. Add the same value
+   to Render as `GMAIL_SENDER_TOKEN`. Never paste the token into chat or commit
+   it to the repository.
+4. In Apps Script, choose **Deploy → New deployment → Web app**. Set **Execute
+   as** to your account, and **Who has access** to **Anyone** so Render can call
+   it without a Google sign-in. Deploy, approve the requested Gmail permission,
+   and copy the web app URL ending in `/exec`. Do not share that URL with the
+   token.
+5. In Render's service **Environment** settings, set `EMAIL_USER` to the same
+   Gmail address that owns the script and set `GMAIL_APPS_SCRIPT_URL` to the
+   deployed `/exec` URL. Remove the old `EMAIL_APP_PASSWORD` variable; it is no
+   longer used.
+6. Save the environment changes and redeploy the Render service. Apps Script
+   uses the Gmail account's sending quota; a free consumer account is generally
+   limited to 100 email recipients per day. See the current
+   [Apps Script quotas](https://developers.google.com/apps-script/guides/services/quotas).
+
+If **Anyone** is not available when deploying the Apps Script web app, the
+Google account's organization policy may block anonymous access. Use a personal
+Gmail account or configure an HTTPS email provider instead.
 
 The admin assistant uses Gemini only to turn an admin's question into a
 restricted set of supported database queries. The service verifies the admin,
