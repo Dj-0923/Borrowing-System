@@ -18,4 +18,4 @@ services:
       - key: EMAIL_APP_PASSWORD
         sync: false
       - key: ALLOWED_ORIGINS
-        sync: false
+        value: https://borrowing-system-lendy.web.app,https://borrowing-system-lendy.firebaseapp.com
