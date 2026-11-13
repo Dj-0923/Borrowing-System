@@ -37,6 +37,22 @@ are handled separately by the Firebase Cloud Functions described below.
    firebase deploy --only firestore:rules --project borrowing-system-lendy
    ```
 
+   The admin dashboard stores notification read state and received timestamps
+   under `meta/{ADMIN_AUTH_UID}/adminNotifications`. The deployed rules restrict
+   those records to the matching admin account. User-reported returns enter
+   `return_pending` and keep equipment unavailable until an admin confirms the
+   return in the Return Verification section. If a report is rejected, the
+   admin must provide a reason; the loan remains active and the borrower can
+   review the reason and submit another report. The admin profile name and
+   photo are published to `publicProfiles/admin` for signed-in users to display
+   in the mobile chat; only admins can update that public profile. New user
+   messages show an unread badge and highlighted user row in the admin inbox;
+   opening the chat marks it as read using
+   `meta/{ADMIN_AUTH_UID}/chatReads/{USER_UID}`. Admin chat messages include
+   the admin's profile photo so mobile can show it beside each reply. The
+   Messages list also provides a three-dot menu to open a user's profile or
+   delete that conversation without deleting the user account or loan history.
+
 ## Deploy the approval service to Render
 
 The repository includes a Render Blueprint in `render.yaml`.

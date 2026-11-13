@@ -56,7 +56,7 @@ button:disabled { cursor: not-allowed; }
 /* status pills */
 .pill { display: inline-flex; align-items: center; justify-content: center; border: 1px solid; border-radius: 999px; padding: 2px 10px; font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; line-height: 1.5; }
 .pill-approved, .pill-available, .pill-active { color: var(--ok-fg); background: var(--ok-bg); border-color: var(--ok-bd); }
-.pill-pending, .pill-borrowed, .pill-borrowing { color: var(--warn-fg); background: var(--warn-bg); border-color: var(--warn-bd); }
+.pill-pending, .pill-return_pending, .pill-borrowed, .pill-borrowing { color: var(--warn-fg); background: var(--warn-bg); border-color: var(--warn-bd); }
 .pill-overdue, .pill-maintenance, .pill-rejected, .pill-revoked { color: var(--bad-fg); background: var(--bad-bg); border-color: var(--bad-bd); }
 .pill-returned, .pill-disabled { color: var(--ret-fg); background: var(--ret-bg); border-color: var(--ret-bd); }
 
@@ -135,6 +135,9 @@ button:disabled { cursor: not-allowed; }
 }
 
 .user-actions-mobile { position: relative; }
+.chat-actions { visibility: hidden; opacity: 0; transition: opacity .15s ease; }
+.chat-user-row-active .chat-actions,
+.chat-user-row:focus-within .chat-actions { visibility: visible; opacity: 1; }
 .user-actions-mobile summary {
   display: flex;
   width: 36px;

@@ -106,17 +106,46 @@ service cloud.firestore {
               && request.resource.data.checkedOutAt is int
               && request.resource.data.updatedAt is int)
             || (resource.data.status == 'approved'
-              && request.resource.data.status == 'returned'
+              && resource.data.checkedOutAt is int
+              && resource.data.get('returnVerificationStatus', '') in ['', 'rejected']
+              && request.resource.data.status == 'return_pending'
+              && request.resource.data.returnRequestedAt == request.time
+              && request.resource.data.returnVerificationStatus == 'pending'
+              && request.resource.data.returnRejectionReason == null
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                'status', 'returnedOn', 'updatedAt'
+                'status', 'returnRequestedAt', 'returnVerificationStatus',
+                'returnRejectionReason', 'updatedAt'
               ])
-              && request.resource.data.returnedOn is string
               && request.resource.data.updatedAt is int)
           ));
       allow delete: if isAdmin();
     }
     match /meta/{docId} {
       allow read, write: if isAdmin();
+
+      match /adminNotifications/{notificationId} {
+        allow get, list: if isAdmin() && request.auth.uid == docId;
+        allow create: if isAdmin()
+          && request.auth.uid == docId
+          && request.resource.data.keys().hasOnly(['read', 'receivedAt'])
+          && request.resource.data.read == false
+          && request.resource.data.receivedAt == request.time;
+        allow update: if isAdmin()
+          && request.auth.uid == docId
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['read'])
+          && request.resource.data.read == true;
+        allow delete: if false;
+      }
+
+      match /chatReads/{userId} {
+        allow get, list: if isAdmin() && request.auth.uid == docId;
+        allow create, update: if isAdmin()
+          && request.auth.uid == docId
+          && request.resource.data.keys().hasOnly(['readAt'])
+          && request.resource.data.readAt == request.time;
+        allow delete: if isAdmin() && request.auth.uid == docId;
+      }
     }
     match /accountRequests/{requestId} {
       allow create: if isAdmin();
@@ -223,6 +252,91 @@ service cloud.firestore {
     match /admins/{adminId} {
       allow read: if signedIn() && request.auth.uid == adminId;
       allow write: if false;
+    }
+    match /publicProfiles/{profileId} {
+      allow get: if profileId == 'admin' && (isAdmin() || hasCompletedAccount());
+      allow list: if false;
+      allow create, update: if profileId == 'admin'
+        && isAdmin()
+        && request.resource.data.keys().hasOnly(['name', 'photo'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 150
+        && (request.resource.data.photo == null
+          || (request.resource.data.photo is string
+            && request.resource.data.photo.size() <= 700000));
+      allow delete: if isAdmin();
+    }
+    match /chats/{userId} {
+      function canAccessChat() {
+        return isAdmin()
+          || (hasCompletedAccount() && request.auth.uid == userId);
+      }
+
+      function validChatUpdate(senderRole) {
+        return request.resource.data.keys().hasOnly([
+            'userId', 'userName', 'userEmail', 'lastMessage',
+            'lastMessageAt', 'lastSenderId', 'lastSenderRole'
+          ])
+          && request.resource.data.userId == userId
+          && request.resource.data.userName is string
+          && request.resource.data.userName.size() <= 600
+          && request.resource.data.userEmail is string
+          && request.resource.data.userEmail.size() <= 254
+          && request.resource.data.lastMessage is string
+          && request.resource.data.lastMessage.size() > 0
+          && request.resource.data.lastMessage.size() <= 2000
+          && request.resource.data.lastMessageAt == request.time
+          && request.resource.data.lastSenderId == request.auth.uid
+          && request.resource.data.lastSenderRole == senderRole;
+      }
+
+      allow get: if isAdmin()
+        || (hasCompletedAccount() && request.auth.uid == userId);
+      allow list: if isAdmin();
+      allow create, update: if (
+          isAdmin()
+          && validChatUpdate('admin')
+        ) || (
+          hasCompletedAccount()
+          && request.auth.uid == userId
+          && validChatUpdate('user')
+        );
+      allow delete: if isAdmin();
+
+      match /messages/{messageId} {
+        function validMessage(senderRole) {
+          return request.resource.data.keys().hasOnly([
+              'senderId', 'senderName', 'senderRole', 'senderPhoto',
+              'text', 'createdAt'
+            ])
+            && request.resource.data.senderId == request.auth.uid
+            && request.resource.data.senderName is string
+            && request.resource.data.senderName.size() <= 600
+            && request.resource.data.senderRole == senderRole
+            && (!('senderPhoto' in request.resource.data)
+              || (senderRole == 'admin'
+                && (request.resource.data.senderPhoto == null
+                  || (request.resource.data.senderPhoto is string
+                    && request.resource.data.senderPhoto.size() <= 700000))))
+            && request.resource.data.text is string
+            && request.resource.data.text.size() > 0
+            && request.resource.data.text.size() <= 2000
+            && request.resource.data.createdAt == request.time;
+        }
+
+        allow get, list: if canAccessChat();
+        allow create: if existsAfter(
+            /databases/$(database)/documents/chats/$(userId)
+          ) && (
+            (isAdmin() && validMessage('admin'))
+            || (hasCompletedAccount()
+              && request.auth.uid == userId
+              && validMessage('user'))
+          );
+        allow update: if false;
+        allow delete: if isAdmin();
+      }
     }
   }
 }

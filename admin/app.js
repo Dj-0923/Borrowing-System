@@ -13,7 +13,6 @@
     document.getElementById('app').textContent =
       err.message || 'Could not verify your sign-in.';
   });
-
   function startDashboard(currentUser) {
 
   /* ---------- helpers ---------- */
@@ -83,6 +82,7 @@
     alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
     clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
     inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+    messages: '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
     qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M14 21h3"/><path d="M21 14v3"/><path d="M21 21h.01"/>',
     pencil: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
     userplus: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>',
@@ -103,12 +103,97 @@
   var metaCol = fsdb.collection('meta');
   var requestsCol = fsdb.collection('accountRequests');
   var accountsCol = fsdb.collection('accounts');
+  var chatsCol = fsdb.collection('chats');
+  var publicAdminProfileDoc = fsdb.collection('publicProfiles').doc('admin');
 
   var profileDoc = metaCol.doc(currentUser.uid);
-  var db = { equipment: [], loans: [], profile: null, accountRequests: [], accounts: [] };
+  var adminNotificationsCol = profileDoc.collection('adminNotifications');
+  var chatReadsCol = profileDoc.collection('chatReads');
+  var db = { equipment: [], loans: [], profile: null, accountRequests: [], accounts: [], chats: [] };
+  var notificationMeta = Object.create(null);
+  var chatReadMeta = Object.create(null);
+  var pendingNotificationMeta = Object.create(null);
+  var failedNotificationMeta = Object.create(null);
   var loaded = { equipment: false, loans: false, profile: false, accountRequests: false, accounts: false };
   var syncError = null;
+  var chatListError = null;
+  var chatReadError = null;
+  var notificationMetaError = null;
+  var notificationMetaLoaded = false;
   var rejectedCleanupInFlight = new Set();
+  var chatReadsInFlight = new Set();
+  var chatMessagesUnsubscribe = null;
+
+  function isChatUnread(chat) {
+    if (!chat || chat.lastSenderRole !== 'user' ||
+        !chat.lastMessageAt || typeof chat.lastMessageAt.toMillis !== 'function') return false;
+    var metadata = chatReadMeta[chat.id];
+    var readAt = metadata && metadata.readAt &&
+      typeof metadata.readAt.toMillis === 'function' ? metadata.readAt.toMillis() : 0;
+    return chat.lastMessageAt.toMillis() > readAt;
+  }
+  function unreadChatCount() {
+    return db.chats.filter(isChatUnread).length;
+  }
+  function markChatRead(id) {
+    var chat = db.chats.find(function (item) { return item.id === id; });
+    if (!isChatUnread(chat) || chatReadsInFlight.has(id)) return;
+    chatReadsInFlight.add(id);
+    chatReadsCol.doc(id).set({
+      readAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).then(function () {
+      chatReadsInFlight.delete(id);
+    }).catch(function (err) {
+      chatReadsInFlight.delete(id);
+      fail('Could not mark the conversation as read')(err);
+    });
+  }
+  function deleteConversation(id) {
+    var chatRef = chatsCol.doc(id);
+    var messagesRef = chatRef.collection('messages');
+    function deleteNextBatch() {
+      return messagesRef.limit(450).get().then(function (snapshot) {
+        if (snapshot.empty) return;
+        var batch = fsdb.batch();
+        snapshot.docs.forEach(function (message) { batch.delete(message.ref); });
+        return batch.commit().then(deleteNextBatch);
+      });
+    }
+    return deleteNextBatch()
+      .then(function () {
+        return Promise.all([
+          chatRef.delete(),
+          chatReadsCol.doc(id).delete()
+        ]);
+      })
+      .then(function () {
+        if (state.chatUserId === id) {
+          if (chatMessagesUnsubscribe) chatMessagesUnsubscribe();
+          chatMessagesUnsubscribe = null;
+          state.chatUserId = null;
+          state.chatMessages = [];
+          state.chatDraft = '';
+        }
+        toast('Conversation deleted.');
+        render();
+      })
+      .catch(fail('Could not delete the conversation'));
+  }
+  function requestConversationDeletion(id) {
+    var account = db.accounts.find(function (item) { return item.id === id; });
+    if (!account) {
+      toast('Could not delete the conversation: user is no longer available.', 'bad');
+      return;
+    }
+    pendingConfirm = function () { deleteConversation(id); };
+    openModal({
+      type: 'confirm',
+      title: 'Delete conversation with ' + (account.name || 'this user') + '?',
+      body: 'This permanently deletes all messages in this conversation. The user account and borrowing history will not be affected.',
+      label: 'Delete conversation',
+      danger: true
+    });
+  }
 
   function allLoaded() { return loaded.equipment && loaded.loans && loaded.profile && loaded.accountRequests && loaded.accounts; }
 
@@ -119,6 +204,7 @@
       });
       loaded[key] = true; syncError = null;
       if (key === 'accountRequests') cleanupLegacyRejectedRequests();
+      syncAdminNotifications();
       if (allLoaded()) render();
     }, function (err) {
       syncError = err; render();
@@ -128,6 +214,44 @@
   watch(loansCol, 'loans');
   watch(requestsCol, 'accountRequests');
   watch(accountsCol, 'accounts');
+  chatsCol.onSnapshot(function (snap) {
+    db.chats = snap.docs.map(function (d) {
+      return Object.assign({}, d.data(), { id: d.id });
+    });
+    chatListError = null;
+    if (state.view === 'messages' && state.chatUserId) markChatRead(state.chatUserId);
+    if (allLoaded()) render();
+  }, function (err) {
+    chatListError = err;
+    if (allLoaded()) render();
+  });
+  adminNotificationsCol.onSnapshot(function (snap) {
+    notificationMeta = Object.create(null);
+    snap.docs.forEach(function (doc) {
+      notificationMeta[doc.id] = doc.data();
+      delete pendingNotificationMeta[doc.id];
+    });
+    notificationMetaLoaded = true;
+    notificationMetaError = null;
+    syncAdminNotifications();
+    if (state.view === 'notifications') markAdminNotificationsRead();
+    if (allLoaded()) render();
+  }, function (err) {
+    notificationMetaLoaded = true;
+    notificationMetaError = err;
+    if (allLoaded()) render();
+  });
+  chatReadsCol.onSnapshot(function (snap) {
+    chatReadMeta = Object.create(null);
+    snap.docs.forEach(function (doc) {
+      chatReadMeta[doc.id] = doc.data();
+    });
+    chatReadError = null;
+    if (allLoaded()) render();
+  }, function (err) {
+    chatReadError = err;
+    if (allLoaded()) render();
+  });
 
   function defaultProfile() {
     var createdAt = currentUser.metadata && currentUser.metadata.creationTime
@@ -155,15 +279,21 @@
   profileDoc.onSnapshot(function (doc) {
     db.profile = doc.exists ? doc.data() : null;
     loaded.profile = true; syncError = null;
+    var publicProfile = profileData();
+    publicAdminProfileDoc.set({
+      name: publicProfile.name,
+      photo: publicProfile.photo || null
+    }, { merge: true }).catch(fail('Could not publish admin profile to mobile'));
+    syncAdminNotifications();
     if (allLoaded()) render();
   }, function (err) { syncError = err; render(); });
 
   /* ---------- derived state ---------- */
   var eqById = function (id) { return db.equipment.find(function (e) { return e.id === id; }); };
-  var activeLoanFor = function (id) { return db.loans.find(function (l) { return l.equipmentId === id && l.status === 'approved'; }); };
+  var activeLoanFor = function (id) { return db.loans.find(function (l) { return l.equipmentId === id && (l.status === 'approved' || l.status === 'return_pending'); }); };
   var itemStatus = function (e) { return e.maintenance ? 'maintenance' : activeLoanFor(e.id) ? 'borrowed' : 'available'; };
   var loanStatus = function (l) { return (l.status === 'approved' && l.end < today()) ? 'overdue' : l.status; };
-  var isCheckout = function (l) { return l.status === 'approved' || l.status === 'returned'; };
+  var isCheckout = function (l) { return l.status === 'approved' || l.status === 'return_pending' || l.status === 'returned'; };
   var pendingRequests = function () { return db.accountRequests.filter(function (r) { return r.status === 'pending'; }); };
   function borrowerName(loan) {
     var account = loan.borrowerUid && db.accounts.find(function (a) {
@@ -198,27 +328,28 @@
     if (account.status === 'revoked') return 'disabled';
     var mine = loansFor(account);
     if (mine.some(function (l) { return loanStatus(l) === 'overdue'; })) return 'overdue';
-    if (mine.some(function (l) { return l.status === 'approved'; })) return 'borrowing';
+    if (mine.some(function (l) { return l.status === 'approved' || l.status === 'return_pending'; })) return 'borrowing';
     return 'active';
   }
   function userSummary(account) {
     var mine = loansFor(account), t = today();
     return {
       loans: mine,
-      itemsOut: mine.filter(function (l) { return l.status === 'approved'; }).length,
+      itemsOut: mine.filter(function (l) { return l.status === 'approved' || l.status === 'return_pending'; }).length,
       totalBorrowed: mine.filter(isCheckout).length,
-      dueSoon: mine.filter(function (l) { return l.status === 'approved' && diffDays(l.end, t) >= 0 && diffDays(l.end, t) <= 2; }).length,
+      dueSoon: mine.filter(function (l) { return (l.status === 'approved' || l.status === 'return_pending') && diffDays(l.end, t) >= 0 && diffDays(l.end, t) <= 2; }).length,
       returned: mine.filter(function (l) { return l.status === 'returned'; }).length,
-      currentBorrowed: mine.filter(function (l) { return l.status === 'approved'; }).length
+      currentBorrowed: mine.filter(function (l) { return l.status === 'approved' || l.status === 'return_pending'; }).length
     };
   }
 
   function stats() {
-    var s = { total: db.equipment.length, available: 0, borrowed: 0, maintenance: 0, out: 0, pending: 0, overdue: 0 };
+    var s = { total: db.equipment.length, available: 0, borrowed: 0, maintenance: 0, out: 0, pending: 0, returnPending: 0, overdue: 0 };
     db.equipment.forEach(function (e) { s[itemStatus(e)]++; });
     db.loans.forEach(function (l) {
-      if (l.status === 'approved') s.out++;
+      if (l.status === 'approved' || l.status === 'return_pending') s.out++;
       if (l.status === 'pending') s.pending++;
+      if (l.status === 'return_pending') s.returnPending++;
       if (loanStatus(l) === 'overdue') s.overdue++;
     });
     return s;
@@ -253,46 +384,113 @@
     var t = today(), out = [];
     db.loans.forEach(function (l) {
       var st = loanStatus(l);
-      if (st === 'overdue') {
+      if (st === 'return_pending') {
+        out.push({ id: 'loan-return-pending-' + l.id, sev: 0, tone: 'warn', icon: 'inbox', title: l.name + ' is waiting for return verification',
+          body: borrowerName(l) + ' reported returning it.', action: { label: 'Review', act: 'nav', view: 'return-verification' } });
+      } else if (st === 'overdue') {
         var n = diffDays(t, l.end);
-        out.push({ sev: 0, tone: 'bad', icon: 'alert', title: l.name + ' is ' + plural(n, 'day') + ' overdue',
+        out.push({ id: 'loan-overdue-' + l.id + '-' + l.end, sev: 0, tone: 'bad', icon: 'alert', title: l.name + ' is ' + plural(n, 'day') + ' overdue',
           body: borrowerName(l) + ' was due back ' + fmt(l.end) + '.', action: { label: 'Mark returned', act: 'return', id: l.id } });
       } else if (st === 'approved') {
         var d = diffDays(l.end, t);
         if (d === 0 || d === 1) {
-          out.push({ sev: 1, tone: 'warn', icon: 'clock', title: l.name + ' is due ' + (d === 0 ? 'today' : 'tomorrow'),
+          out.push({ id: 'loan-due-' + l.id + '-' + l.end, sev: 1, tone: 'warn', icon: 'clock', title: l.name + ' is due ' + (d === 0 ? 'today' : 'tomorrow'),
             body: borrowerName(l) + ' returns it ' + fmt(l.end) + '.', action: { label: 'Mark returned', act: 'return', id: l.id } });
         }
       } else if (st === 'pending') {
-        out.push({ sev: 1, tone: 'warn', icon: 'filecheck', title: borrowerName(l) + ' requested ' + l.name,
+        out.push({ id: 'loan-pending-' + l.id, sev: 1, tone: 'warn', icon: 'filecheck', title: borrowerName(l) + ' requested ' + l.name,
           body: fmt(l.start) + ' → ' + fmt(l.end), action: { label: 'Review', act: 'nav', view: 'approvals' } });
       } else if (st === 'returned' && l.returnedOn && diffDays(t, l.returnedOn) <= 2) {
-        out.push({ sev: 3, tone: 'ok', icon: 'check', title: l.name + ' was returned',
+        out.push({ id: 'loan-returned-' + l.id + '-' + l.returnedOn, sev: 3, tone: 'ok', icon: 'check', title: l.name + ' was returned',
           body: borrowerName(l) + ' returned it ' + fmt(l.returnedOn) + '.' });
       }
     });
     db.equipment.filter(function (e) { return e.maintenance; }).forEach(function (e) {
-      out.push({ sev: 2, tone: 'bad', icon: 'wrench', title: e.name + ' is in maintenance',
+      out.push({ id: 'equipment-maintenance-' + e.id, sev: 2, tone: 'bad', icon: 'wrench', title: e.name + ' is in maintenance',
         body: 'Unavailable for borrowing until it is back in service.', action: { label: 'Back in service', act: 'maintenance-off', id: e.id } });
     });
     pendingRequests().forEach(function (r) {
-      out.push({ sev: 1, tone: 'warn', icon: 'userplus', title: r.name + ' wants an account',
+      out.push({ id: 'account-request-' + r.id, sev: 1, tone: 'warn', icon: 'userplus', title: r.name + ' wants an account',
         body: r.email, action: { label: 'Review', act: 'nav', view: 'requests' } });
     });
+    out.forEach(function (notification) {
+      var metadata = notificationMeta[notification.id];
+      notification.read = Boolean(metadata && metadata.read);
+      notification.receivedAt = metadata && metadata.receivedAt;
+    });
     return out.sort(function (a, b) { return a.sev - b.sev; });
+  }
+
+  function syncAdminNotifications() {
+    if (!notificationMetaLoaded || notificationMetaError || !allLoaded()) return;
+    buildNotifications().forEach(function (notification) {
+      if (notificationMeta[notification.id] || pendingNotificationMeta[notification.id] ||
+          failedNotificationMeta[notification.id]) return;
+      pendingNotificationMeta[notification.id] = true;
+      var notificationRef = adminNotificationsCol.doc(notification.id);
+      fsdb.runTransaction(function (transaction) {
+        return transaction.get(notificationRef).then(function (doc) {
+          if (!doc.exists) {
+            transaction.set(notificationRef, {
+              read: false,
+              receivedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          }
+        });
+      }).then(function () {
+        delete pendingNotificationMeta[notification.id];
+      }).catch(function (err) {
+        delete pendingNotificationMeta[notification.id];
+        failedNotificationMeta[notification.id] = true;
+        notificationMetaError = err;
+        if (allLoaded()) render();
+      });
+    });
+  }
+
+  function markAdminNotificationsRead() {
+    if (!notificationMetaLoaded || notificationMetaError || !allLoaded()) return;
+    var unread = buildNotifications().filter(function (notification) {
+      return !notification.read && notificationMeta[notification.id];
+    });
+    if (!unread.length) return;
+
+    var batch = fsdb.batch();
+    unread.forEach(function (notification) {
+      batch.update(adminNotificationsCol.doc(notification.id), { read: true });
+      notificationMeta[notification.id].read = true;
+    });
+    batch.commit().then(function () {
+      render();
+    }).catch(function (err) {
+      notificationMetaError = err;
+      unread.forEach(function (notification) {
+        notificationMeta[notification.id].read = false;
+      });
+      render();
+    });
+  }
+
+  function notificationReceivedTime(timestamp) {
+    if (!timestamp || typeof timestamp.toDate !== 'function') return 'Received just now';
+    return 'Received ' + timestamp.toDate().toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit'
+    });
   }
 
   /* ---------- ui state ---------- */
   var state = {
     view: 'dashboard', lastView: null, lastChartKey: null, chartMode: 'day', chartAnimation: false, sidebarOpen: false, assistantOpen: false, modal: null,
-    filter: { inventory: 'all', history: 'all', usersRole: 'all', usersCourse: 'all' }, q: { inventory: '', history: '', users: '' },
+    filter: { inventory: 'all', history: 'all', usersRole: 'all', usersCourse: 'all' }, q: { inventory: '', history: '', users: '', messages: '' },
+    chatUserId: null, chatMessages: [], chatError: null, chatDraft: '',
     tab: { requests: 'pending' },
     chat: [{ from: 'bot', text: "Hi, I'm the Lendy assistant. Ask me what's going on with the equipment." }]
   };
   var pendingConfirm = null;
 
   /* ---------- shared template pieces ---------- */
-  var LABEL = { approved: 'Approved', overdue: 'Overdue', pending: 'Pending', returned: 'Returned', rejected: 'Rejected',
+  var LABEL = { approved: 'Approved', overdue: 'Overdue', pending: 'Pending', return_pending: 'Return verification', returned: 'Returned', rejected: 'Rejected',
     available: 'Available', borrowed: 'Borrowed', maintenance: 'Maintenance', active: 'Active', revoked: 'Revoked',
     disabled: 'Disabled', borrowing: 'Borrowing' };
   var pill = function (st) { return '<span class="pill pill-' + st + '">' + LABEL[st] + '</span>'; };
@@ -333,13 +531,15 @@
   function sidebar() {
     var s = stats();
     var p = db.profile || defaultProfile();
-    var attention = buildNotifications().filter(function (n) { return n.sev <= 1; }).length;
+    var attention = buildNotifications().filter(function (n) { return !n.read; }).length;
     var items = [
       ['dashboard', 'Dashboard', 'chart', 0],
       ['approvals', 'Approval queue', 'filecheck', s.pending],
+      ['return-verification', 'Return verification', 'inbox', s.returnPending],
       ['requests', 'Requests', 'userplus', pendingRequests().length],
       ['inventory', 'Inventory', 'archive', 0],
       ['users', 'Users', 'users', 0],
+      ['messages', 'Messages', 'messages', unreadChatCount()],
       ['history', 'Borrowing history', 'scroll', 0],
       ['notifications', 'Notifications', 'bell', attention]
     ];
@@ -506,6 +706,41 @@
       '<div class="mt-8">' + body + '</div>';
   }
 
+  function returnRequestedTime(value) {
+    var date = value && typeof value.toDate === 'function' ? value.toDate() : new Date(value);
+    if (!value || isNaN(date.getTime())) return 'Time unavailable';
+    return MON[date.getMonth()] + ' ' + date.getDate() + ', ' + date.getFullYear() +
+      ' at ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+  }
+  function viewReturnVerification() {
+    var list = db.loans.filter(function (loan) { return loan.status === 'return_pending'; })
+      .sort(function (a, b) {
+        var aTime = a.returnRequestedAt && typeof a.returnRequestedAt.toMillis === 'function'
+          ? a.returnRequestedAt.toMillis() : a.updatedAt || 0;
+        var bTime = b.returnRequestedAt && typeof b.returnRequestedAt.toMillis === 'function'
+          ? b.returnRequestedAt.toMillis() : b.updatedAt || 0;
+        return aTime - bTime;
+      });
+    var body = list.length
+      ? '<div class="grid gap-3">' + list.map(function (loan) {
+        var equipment = eqById(loan.equipmentId);
+        return '<div class="rounded-2xl bg-card border border-line shadow-soft p-4 sm:p-5 flex flex-wrap items-center gap-4">' +
+          mediaTile(equipment, 'w-12 h-12') +
+          '<div class="min-w-[220px] flex-1"><div class="flex flex-wrap items-center gap-2"><p class="font-semibold">' + esc(loan.name) + '</p>' + pill('return_pending') + '</div>' +
+          '<p class="text-sm text-muted mt-1">' + esc(borrowerName(loan)) + (equipment && equipment.tag ? ' · ' + esc(equipment.tag) : '') + '</p>' +
+          '<p class="text-xs text-muted mt-1">Reported ' + esc(returnRequestedTime(loan.returnRequestedAt)) + '</p>' +
+          '<div class="mt-3"><label class="sr-only" for="return-reason-' + loan.id + '">Reason for not verifying return</label>' +
+          '<input id="return-reason-' + loan.id + '" data-rejection-reason="' + loan.id + '" class="field w-full" maxlength="300" placeholder="Reason required if return is not verified"></div></div>' +
+          '<div class="flex gap-2 ml-auto">' +
+          '<button class="btn btn-danger" data-action="reject-return" data-id="' + loan.id + '">Reject</button>' +
+          '<button class="btn btn-primary" data-action="verify-return" data-id="' + loan.id + '">' + icon('check', 'w-4 h-4') + 'Confirm return</button>' +
+          '</div></div>';
+      }).join('') + '</div>'
+      : emptyState('check', 'No returns to verify', 'User-reported returns will appear here while the equipment remains checked out.');
+    return pageHeader('Return Verification', list.length ? plural(list.length, 'return') + ' waiting for your review.' : 'All reported returns have been reviewed.') +
+      '<div class="mt-8">' + body + '</div>';
+  }
+
   function fmtWhen(ms) {
     var d = new Date(ms), days = diffDays(today(), iso(d));
     if (days <= 0) return 'today';
@@ -637,6 +872,205 @@
       '<p class="mt-3 text-xs text-muted">Showing ' + rows.length + ' of ' + accounts.length + ' users</p>';
   }
 
+  function selectChatUser(id) {
+    if (!db.accounts.some(function (account) { return account.id === id; })) return;
+    if (chatMessagesUnsubscribe) chatMessagesUnsubscribe();
+    state.chatUserId = id;
+    state.chatMessages = [];
+    state.chatError = null;
+    state.chatDraft = '';
+    markChatRead(id);
+    chatMessagesUnsubscribe = chatsCol.doc(id).collection('messages')
+      .orderBy('createdAt')
+      .onSnapshot(function (snap) {
+        state.chatMessages = snap.docs.map(function (doc) {
+          return Object.assign({}, doc.data(), { id: doc.id });
+        });
+        state.chatError = null;
+        if (state.view === 'messages') render();
+      }, function (err) {
+        state.chatError = err.message || 'Could not load this conversation.';
+        if (state.view === 'messages') render();
+      });
+    render();
+  }
+
+  function chatName(name) {
+    return Array.from(String(name || '')).slice(0, 150).join('');
+  }
+
+  function sendChatMessage() {
+    var account = db.accounts.find(function (item) { return item.id === state.chatUserId; });
+    var text = state.chatDraft.trim();
+    if (!account || !text) return;
+    if (account.status === 'revoked') {
+      toast('This account is disabled and cannot receive messages.', 'bad');
+      return;
+    }
+
+    var chatRef = chatsCol.doc(account.id);
+    var messageRef = chatRef.collection('messages').doc();
+    var batch = fsdb.batch();
+    batch.set(chatRef, {
+      userId: account.id,
+      userName: chatName(account.name || account.email || 'User'),
+      userEmail: account.email || '',
+      lastMessage: text,
+      lastMessageAt: firebase.firestore.FieldValue.serverTimestamp(),
+      lastSenderId: currentUser.uid,
+      lastSenderRole: 'admin'
+    }, { merge: true });
+    batch.set(messageRef, {
+      senderId: currentUser.uid,
+      senderName: chatName(profileData().name),
+      senderRole: 'admin',
+      senderPhoto: profileData().photo || null,
+      text: text,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    batch.commit().then(function () {
+      state.chatDraft = '';
+      render();
+    }).catch(fail('Could not send message'));
+  }
+
+  function resizeChatInput(input) {
+    input.style.height = 'auto';
+    var maxHeight = 128;
+    input.style.height = Math.min(input.scrollHeight, maxHeight) + 'px';
+    input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }
+
+  function chatTime(timestamp) {
+    if (!timestamp || typeof timestamp.toDate !== 'function') return '';
+    return timestamp.toDate().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  function chatDate(timestamp) {
+    if (!timestamp || typeof timestamp.toDate !== 'function') return '';
+    var date = timestamp.toDate();
+    var now = new Date();
+    var todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var messageDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    var daysAgo = Math.round((todayDate - messageDate) / 86400000);
+    if (daysAgo === 0) return 'Today';
+    if (daysAgo === 1) return 'Yesterday';
+    return date.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  function viewMessages() {
+    var query = state.q.messages.trim().toLowerCase();
+    var selected = db.accounts.find(function (account) { return account.id === state.chatUserId; });
+    var accounts = db.accounts.filter(function (account) {
+      return !query || (account.name + ' ' + account.email).toLowerCase().indexOf(query) !== -1;
+    }).slice().sort(function (a, b) {
+      var aChat = db.chats.find(function (chat) { return chat.id === a.id; });
+      var bChat = db.chats.find(function (chat) { return chat.id === b.id; });
+      var aTime = aChat && aChat.lastMessageAt && typeof aChat.lastMessageAt.toMillis === 'function'
+        ? aChat.lastMessageAt.toMillis() : 0;
+      var bTime = bChat && bChat.lastMessageAt && typeof bChat.lastMessageAt.toMillis === 'function'
+        ? bChat.lastMessageAt.toMillis() : 0;
+      return bTime - aTime || a.name.localeCompare(b.name);
+    });
+    var userList = accounts.length
+      ? '<div class="divide-y divide-[color:var(--line)]">' + accounts.map(function (account) {
+          var chat = db.chats.find(function (item) { return item.id === account.id; });
+          var active = selected && selected.id === account.id;
+          var unread = isChatUnread(chat);
+          var rowStyle = unread
+            ? 'background:#dff3ea;border-left:4px solid #0e5a4d'
+            : active ? 'background:#edf6f2;border-left:4px solid #9bc9b8' : 'border-left:4px solid transparent';
+          return '<div class="chat-user-row flex items-center gap-2 px-2 transition hover:bg-tint/60' +
+            (active ? ' chat-user-row-active' : '') + '" style="' + rowStyle + '">' +
+            '<button type="button" data-action="select-chat" data-id="' + esc(account.id) + '" class="min-w-0 flex-1 text-left flex items-center gap-3 py-3">' +
+            userAvatar(account, 'w-10 h-10', 'text-sm') +
+            '<span class="min-w-0 flex-1"><span class="block truncate text-sm ' + (unread ? 'font-bold text-brand-deep' : 'font-semibold') + '">' + esc(account.name || account.email || 'User') + '</span>' +
+            '<span class="block truncate text-xs mt-0.5 ' + (unread ? 'font-semibold text-brand-deep' : 'text-muted') + '">' +
+            esc(chat && chat.lastMessage ? chat.lastMessage : account.email || 'Start a conversation') +
+            '</span></span>' +
+            (unread ? '<span class="shrink-0 rounded-full bg-emerald-700 px-2 py-0.5 text-[10px] font-bold text-white">New</span>' : '') +
+            (account.status === 'revoked' ? '<span class="pill pill-revoked text-[10px]">Disabled</span>' : '') +
+            '</button><details class="user-actions-mobile chat-actions shrink-0" data-stop-row>' +
+            '<summary aria-label="Actions for ' + esc(account.name || 'user') + '" title="Conversation actions">\u22ee</summary>' +
+            '<div class="user-actions-menu">' +
+            '<button type="button" data-action="open-user" data-id="' + esc(account.id) + '">View profile</button>' +
+            '<button type="button" class="user-actions-delete" data-action="delete-conversation" data-id="' + esc(account.id) + '">Delete conversation</button>' +
+            '</div></details></div>';
+        }).join('') + '</div>'
+      : emptyState('users', 'No users found', query ? 'Try another name or email.' : 'Approve an account before starting a conversation.');
+    var conversation;
+    if (!selected) {
+      conversation = '<div class="flex flex-1 min-h-0 items-center justify-center p-8">' +
+        emptyState('messages', 'Select a user', 'Choose an account to start or continue a private conversation.') +
+        '</div>';
+    } else {
+      var previousMessageDate = null;
+      var bubbles = state.chatMessages.length
+        ? '<div class="flex flex-col gap-3">' + state.chatMessages.map(function (message) {
+            var mine = message.senderId === currentUser.uid;
+            var messageTimestamp = message.createdAt && typeof message.createdAt.toDate === 'function'
+              ? message.createdAt.toDate() : null;
+            var messageDate = messageTimestamp
+              ? messageTimestamp.getFullYear() + '-' + messageTimestamp.getMonth() + '-' + messageTimestamp.getDate()
+              : null;
+            var dateDivider = messageDate && messageDate !== previousMessageDate
+              ? '<div class="py-2 text-center text-[11px] font-medium text-muted">' + esc(chatDate(message.createdAt)) + '</div>'
+              : '';
+            previousMessageDate = messageDate;
+            var messageContent = '<div class="flex flex-col ' + (mine ? 'items-end' : 'items-start') + ' mb-1">' +
+              '<p class="mb-1 px-2 text-[10px] text-muted">' +
+              (mine ? 'Admin · ' : esc(selected.name || 'User') + ' · ') + esc(chatTime(message.createdAt)) +
+              '</p><div class="max-w-[85%] rounded-2xl px-4 py-2.5 ' +
+              (mine ? 'bg-[color:var(--btn-bg)] text-white' : 'bg-tint text-ink') + '">' +
+              '<p class="text-sm whitespace-pre-wrap break-words">' + esc(message.text) + '</p></div></div>';
+            return dateDivider + (mine
+              ? '<div class="flex justify-end">' + messageContent + '</div>'
+              : '<div class="flex items-end gap-2">' +
+                userAvatar(selected, 'w-8 h-8', 'text-[10px]') + messageContent + '</div>');
+          }).join('') + '</div>'
+        : '<div class="h-full min-h-[260px] flex flex-col items-center justify-center text-center px-6 py-10">' +
+          userAvatar(selected, 'w-16 h-16', 'text-xl') +
+          '<p class="mt-4 font-semibold text-base">' + esc(selected.name || 'User') + '</p>' +
+          '<p class="mt-6 text-sm text-muted">This is the start of the conversation</p></div>';
+      var disabled = selected.status === 'revoked';
+      conversation =
+        '<div class="flex flex-1 min-h-0 flex-col">' +
+        '<div class="border-b border-line px-5 py-4 flex items-center gap-3">' +
+        userAvatar(selected, 'w-10 h-10', 'text-sm') +
+        '<div class="min-w-0"><p class="font-semibold truncate">' + esc(selected.name || 'User') + '</p>' +
+        '<p class="text-xs text-muted truncate">' + esc(selected.email || '') + '</p></div>' +
+        '<span class="ml-auto">' + pill(selected.status === 'revoked' ? 'revoked' : 'active') + '</span></div>' +
+        (state.chatError ? '<p class="px-5 py-3 text-sm text-red-600">' + esc(state.chatError) + '</p>' : '') +
+        '<div id="chat-message-list" class="flex-1 overflow-y-auto p-5">' + bubbles + '</div>' +
+        (disabled
+          ? '<p class="border-t border-line p-4 text-sm text-muted">Messaging is unavailable while this account is disabled.</p>'
+          : '<form data-form="chat" class="border-t border-line p-4 flex items-end gap-2">' +
+            '<textarea id="chat-input" data-chat-input rows="1" maxlength="500" placeholder="Write a message..." ' +
+            'class="field min-h-[44px] max-h-32 resize-none flex-1 overflow-y-hidden">' + esc(state.chatDraft) + '</textarea>' +
+            '<button type="submit" class="btn btn-primary h-11">' + icon('send', 'w-4 h-4') + 'Send</button></form>') +
+        '</div>';
+    }
+
+    return pageHeader('Messages', 'Private conversations between you and your users.') +
+      (chatListError
+        ? '<div class="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">Could not load conversations: ' +
+          esc(chatListError.message || 'Check the Firestore chat read rules for this admin account.') +
+          '</div>'
+        : '') +
+      (chatReadError
+        ? '<div class="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">Could not load conversation read status: ' +
+          esc(chatReadError.message || 'Check the admin chat read metadata rules.') +
+          '</div>'
+        : '') +
+      '<div class="mt-7 grid min-h-0 flex-1 grid-rows-[minmax(0,0.65fr)_minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)] lg:grid-rows-1">' +
+      '<section class="flex min-h-0 flex-col rounded-2xl border border-line bg-card shadow-soft overflow-hidden">' +
+      '<div class="border-b border-line p-4"><h2 class="font-display font-bold text-lg">Users</h2>' +
+      '<div class="mt-3">' + searchBox('messages', 'Search name or email') + '</div></div>' +
+      '<div class="flex-1 min-h-0 overflow-y-auto">' + userList + '</div></section>' +
+      '<section class="flex min-h-0 flex-col rounded-2xl border border-line bg-card shadow-soft overflow-hidden">' +
+      conversation + '</section></div>';
+  }
+
   function viewRequests() {
     var tab = state.tab.requests;
     var pendingCount = pendingRequests().length, accountsCount = db.accounts.length;
@@ -708,12 +1142,12 @@
     var counts = { all: loans.length, active: 0, pending: 0, overdue: 0, returned: 0, rejected: 0 };
     loans.forEach(function (l) {
       var st = loanStatus(l);
-      if (st === 'approved' || st === 'overdue') counts.active++;
+      if (st === 'approved' || st === 'overdue' || st === 'return_pending') counts.active++;
       if (counts[st] != null) counts[st]++;
     });
     var rows = loans.filter(function (l) {
       var st = loanStatus(l);
-      var ok = f === 'all' || (f === 'active' ? (st === 'approved' || st === 'overdue') : st === f);
+      var ok = f === 'all' || (f === 'active' ? (st === 'approved' || st === 'overdue' || st === 'return_pending') : st === f);
       return ok && (!q || (l.name + ' ' + borrowerName(l)).toLowerCase().indexOf(q) !== -1);
     });
     var C = 'grid-cols-[minmax(0,1.6fr)_minmax(0,1.2fr)_minmax(0,1.4fr)_104px]';
@@ -742,18 +1176,29 @@
 
   function viewNotifications() {
     var notes = buildNotifications();
-    var urgent = notes.filter(function (n) { return n.sev <= 1; }).length;
+    var unreadCount = notes.filter(function (n) { return !n.read; }).length;
     var body;
     if (!notes.length) body = emptyState('bell', 'Nothing needs your attention', 'Overdue items, due dates, new requests and repairs will show up here.');
     else body = '<div class="grid gap-3">' + notes.map(function (n) {
       var act = '';
       if (n.action) act = '<button class="btn btn-ghost btn-sm ml-auto" data-action="' + n.action.act + '"' +
         (n.action.id ? ' data-id="' + n.action.id + '"' : '') + (n.action.view ? ' data-view="' + n.action.view + '"' : '') + '>' + n.action.label + '</button>';
-      return '<div class="rounded-2xl bg-card border border-line shadow-soft p-4 flex items-center gap-4">' +
-        '<span class="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center" style="background:var(--' + n.tone + '-bg);color:var(--' + n.tone + '-fg)">' + icon(n.icon, 'w-5 h-5') + '</span>' +
-        '<div class="min-w-0"><p class="font-semibold text-[15px] leading-snug">' + esc(n.title) + '</p><p class="text-sm text-muted mt-0.5">' + esc(n.body) + '</p></div>' + act + '</div>';
+      var readStyle = n.read ? 'bg-gray-100 border-gray-200' : 'bg-amber-50 border-amber-300';
+      var iconStyle = n.read
+        ? 'background:#e5e7eb;color:#6b7280'
+        : 'background:var(--' + n.tone + '-bg);color:var(--' + n.tone + '-fg)';
+      return '<div class="rounded-2xl border shadow-soft p-4 flex items-center gap-4 ' + readStyle + '">' +
+        '<span class="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center" style="' + iconStyle + '">' + icon(n.icon, 'w-5 h-5') + '</span>' +
+        '<div class="min-w-0 flex-1"><p class="font-semibold text-[15px] leading-snug ' + (n.read ? 'text-gray-500' : 'text-ink') + '">' + esc(n.title) + '</p>' +
+        '<p class="text-sm text-muted mt-0.5">' + esc(n.body) + '</p>' +
+        '<p class="text-xs mt-1 ' + (n.read ? 'text-gray-400' : 'text-amber-800') + '">' + esc(notificationReceivedTime(n.receivedAt)) + '</p></div>' + act + '</div>';
     }).join('') + '</div>';
-    return pageHeader('Notifications', urgent ? plural(urgent, 'item') + ' need your attention.' : 'Nothing urgent right now.') + '<div class="mt-8">' + body + '</div>';
+    var error = notificationMetaError
+      ? '<div class="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">Could not save notification read status: ' +
+        esc(notificationMetaError.message || 'Check the admin notification Firestore rules.') + '</div>'
+      : '';
+    return pageHeader('Notifications', unreadCount ? plural(unreadCount, 'unread notification') : 'All caught up.') +
+      error + '<div class="mt-8">' + body + '</div>';
   }
 
   function detailRow(label, valueHtml) {
@@ -794,7 +1239,7 @@
       '</div>';
   }
 
-  var VIEWS = { dashboard: viewDashboard, approvals: viewApprovals, requests: viewRequests, inventory: viewInventory, users: viewUsers, history: viewHistory, notifications: viewNotifications, profile: viewProfile };
+  var VIEWS = { dashboard: viewDashboard, approvals: viewApprovals, 'return-verification': viewReturnVerification, requests: viewRequests, inventory: viewInventory, users: viewUsers, messages: viewMessages, history: viewHistory, notifications: viewNotifications, profile: viewProfile };
 
   /* ---------- render ---------- */
   function centerScreen(inner) {
@@ -813,7 +1258,11 @@
       return;
     }
     var a = document.activeElement;
-    var keep = (a && a.matches && a.matches('input[data-search]')) ? { id: a.id, pos: a.selectionStart } : null;
+    var keep = (a && a.matches && a.matches('input[data-search]'))
+      ? { id: a.id, pos: a.selectionStart }
+      : (a && a.matches && a.matches('[data-chat-input]'))
+        ? { id: a.id, pos: a.selectionStart }
+        : null;
     var changed = state.lastView !== state.view;
     var chartKey = state.view === 'dashboard'
       ? state.chartMode + ':' + chartData(state.chartMode).map(function (d) { return d.label + '=' + d.count; }).join('|')
@@ -824,11 +1273,30 @@
     state.chartAnimation = animateChart;
     state.lastView = state.view;
     activeUserActionsMenu = null;
+    var pageLayoutClass = state.view === 'messages'
+      ? 'flex h-screen flex-col overflow-hidden'
+      : 'min-h-full';
+    var mainLayoutClass = state.view === 'messages'
+      ? 'flex min-h-0 flex-1 flex-col overflow-hidden pb-6'
+      : 'pb-28';
     app.innerHTML =
       (state.sidebarOpen ? '<div data-action="toggle-sidebar" class="fixed inset-0 z-30 bg-black/40 lg:hidden"></div>' : '') +
       sidebar() +
-      '<div class="lg:pl-[266px] min-h-full">' + mobileBar() +
-      '<main class="' + (changed ? 'view-enter ' : '') + (animateChart ? 'chart-enter ' : '') + 'px-5 sm:px-8 lg:px-12 xl:px-16 pt-8 lg:pt-14 pb-28 max-w-[2000px]">' + VIEWS[state.view]() + '</main></div>';
+      '<div class="lg:pl-[266px] ' + pageLayoutClass + '">' + mobileBar() +
+      '<main class="' + (changed ? 'view-enter ' : '') + (animateChart ? 'chart-enter ' : '') + 'px-5 sm:px-8 lg:px-12 xl:px-16 pt-8 lg:pt-14 ' + mainLayoutClass + ' max-w-[2000px]">' + VIEWS[state.view]() + '</main></div>';
+    var chatInput = app.querySelector('[data-chat-input]');
+    if (chatInput) resizeChatInput(chatInput);
+    var chatMessageList = document.getElementById('chat-message-list');
+    if (chatMessageList) chatMessageList.scrollTop = chatMessageList.scrollHeight;
+    if (keep && keep.id) {
+      var restored = document.getElementById(keep.id);
+      if (restored) {
+        restored.focus();
+        if (typeof keep.pos === 'number' && restored.setSelectionRange) {
+          restored.setSelectionRange(keep.pos, keep.pos);
+        }
+      }
+    }
     app.querySelectorAll('.user-actions-mobile').forEach(function (menu) {
       menu.addEventListener('toggle', function () {
         if (menu.open) {
@@ -1101,6 +1569,32 @@
       .then(function () { toast(l.name + ' marked as returned.'); })
       .catch(fail('Could not mark it returned'));
   }
+  function verifyReturn(id) {
+    var loan = db.loans.find(function (item) { return item.id === id; });
+    if (!loan || loan.status !== 'return_pending') return;
+    loansCol.doc(id).update({
+      status: 'returned',
+      returnedOn: today(),
+      returnVerificationStatus: 'confirmed',
+      returnVerifiedAt: Date.now(),
+      updatedAt: Date.now()
+    }).then(function () {
+      toast(loan.name + ' return verified.');
+    }).catch(fail('Could not verify the return'));
+  }
+  function rejectReturn(id, reason) {
+    var loan = db.loans.find(function (item) { return item.id === id; });
+    if (!loan || loan.status !== 'return_pending') return;
+    loansCol.doc(id).update({
+      status: 'approved',
+      returnVerificationStatus: 'rejected',
+      returnRejectionReason: reason,
+      returnVerifiedAt: Date.now(),
+      updatedAt: Date.now()
+    }).then(function () {
+      toast(loan.name + ' return was not verified. The borrower can review the reason and resubmit.');
+    }).catch(fail('Could not reject the return verification'));
+  }
   function setMaintenance(id, on) {
     var e = eqById(id); if (!e) return;
     if (on && activeLoanFor(id)) { toast('Return ' + e.name + ' before sending it to maintenance.', 'bad'); return; }
@@ -1171,10 +1665,10 @@
       '<div id="f-custom-category-wrap" class="mt-3"' + (selectedCategory === 'Other' ? '' : ' hidden') + '><label class="lbl" for="f-custom-category">' + (editing ? 'Category name' : 'New category') + '</label>' +
       '<input id="f-custom-category" name="customCategory" class="field" placeholder="Enter category name" maxlength="40" autocomplete="off" value="' + esc(editing && !knownCategory ? item.category : '') + '"></div></div>' +
       '<div><label class="lbl" for="f-tag">Asset tag <span class="font-normal">(optional)</span></label><input id="f-tag" name="tag" class="field" placeholder="Auto-generated" maxlength="16" autocomplete="off" value="' + esc(editing ? item.tag : '') + '"></div></div>' +
-      '<div><label class="lbl" for="f-image">Photo <span class="font-normal">(optional)</span></label>' +
+      '<div><label class="lbl" for="f-image">Photo' + (editing ? ' <span class="font-normal">(optional)</span>' : ' <span class="text-red-600" aria-hidden="true">*</span><span class="sr-only"> (required)</span>') + '</label>' +
       '<div class="flex items-center gap-3">' +
       '<span id="image-preview" class="shrink-0 w-14 h-14 rounded-xl bg-tint text-brand flex items-center justify-center overflow-hidden">' + imagePreview + '</span>' +
-      '<input id="f-image" name="image" type="file" accept="image/*" class="field" style="padding:.5rem .7rem"></div>' +
+      '<input id="f-image" name="image" type="file" accept="image/*" class="field" style="padding:.5rem .7rem"' + (editing ? '' : ' required') + '></div>' +
       '<p class="text-[11px] text-muted mt-1.5">JPG or PNG. It\u2019s resized automatically before saving.</p>' +
       (editing && item.image ? '<label class="flex items-center gap-2 text-xs text-muted"><input type="checkbox" name="removeImage" class="w-4 h-4" style="accent-color:var(--brand)"> Remove current photo</label>' : '') + '</div>' +
       '<p id="form-error" class="text-sm t-bad min-h-[1.25rem]" role="alert"></p>' +
@@ -1368,6 +1862,8 @@
     var cat = catRaw === 'Other' ? String(f.get('customCategory') || '').trim() : catRaw;
     if (!cat) return formError('Enter a name for the new category.');
     var file = form.elements.image && form.elements.image.files[0];
+    if (!file) return formError('Add an item photo before saving.');
+    if (!/^image\//.test(file.type)) return formError('Choose a valid image file.');
     var submitBtn = form.querySelector('button[type=submit]');
     if (submitBtn) submitBtn.disabled = true;
     compressImage(file)
@@ -1773,10 +2269,16 @@
       case 'user-actions-toggle': break;
       case 'nav':
         state.view = el.dataset.view; state.sidebarOpen = false;
+        if (state.view === 'messages' && state.chatUserId) markChatRead(state.chatUserId);
         if (state.view === 'history') { state.filter.history = el.dataset.filter || 'all'; state.q.history = ''; }
         if (state.view === 'inventory') { state.filter.inventory = 'all'; state.q.inventory = ''; }
         if (state.view === 'users') { state.filter.usersRole = 'all'; state.filter.usersCourse = 'all'; state.q.users = ''; }
+        if (state.view === 'notifications') markAdminNotificationsRead();
         render(); break;
+      case 'select-chat':
+        selectChatUser(id); break;
+      case 'delete-conversation':
+        requestConversationDeletion(id); break;
       case 'toggle-sidebar': state.sidebarOpen = !state.sidebarOpen; render(); break;
       case 'chart-mode':
         if (state.chartMode !== el.dataset.mode) {
@@ -1812,6 +2314,17 @@
         requestAccountDeletion(id);
         break;
       case 'return': markReturned(id); break;
+      case 'verify-return': verifyReturn(id); break;
+      case 'reject-return':
+        var reasonInput = $('[data-rejection-reason="' + id + '"]');
+        var reason = reasonInput ? reasonInput.value.trim() : '';
+        if (!reason) {
+          toast('Enter a reason so the borrower knows why the return was not verified.', 'bad');
+          if (reasonInput) reasonInput.focus();
+          break;
+        }
+        rejectReturn(id, reason);
+        break;
       case 'maintenance-on': setMaintenance(id, true); break;
       case 'maintenance-off': setMaintenance(id, false); break;
       case 'edit-equipment':
@@ -1855,6 +2368,11 @@
     }
   });
   document.addEventListener('input', function (ev) {
+    if (ev.target && ev.target.matches && ev.target.matches('[data-chat-input]')) {
+      state.chatDraft = ev.target.value;
+      resizeChatInput(ev.target);
+      return;
+    }
     var k = ev.target && ev.target.dataset && ev.target.dataset.search;
     if (k) { state.q[k] = ev.target.value; render(); }
   });
@@ -1898,6 +2416,7 @@
     else if (form.dataset.form === 'edit-equipment') submitEditEquipment(form);
     else if (form.dataset.form === 'approve-account') submitApproveRequest(form);
     else if (form.dataset.form === 'edit-profile') submitEditProfile(form);
+    else if (form.dataset.form === 'chat') sendChatMessage();
     else if (form.id === 'assistant-form') submitAssistant(form);
   });
   document.addEventListener('keydown', function (ev) {
