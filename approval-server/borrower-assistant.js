@@ -105,8 +105,27 @@ function borrowerProfileField(question) {
   if (/\bmy\s+(?:block|section)\b/.test(normalized)) {
     return "block";
   }
-  if (/\bmy\s+gender\b/.test(normalized)) {
+  const asksAboutGender =
+    /\bmy\s+gender\b|\bwhat(?:'s| is)?\s+gender\s+(?:am i|i am|i'm)\b|\bwhat is my gender\b/.test(
+      normalized,
+    );
+  const asksAboutOrientation =
+    /\b(?:gay|lesbian|bisexual|straight|queer|asexual|pansexual|sexual orientation|sexuality)\b/.test(
+      normalized,
+    );
+  if (asksAboutGender && asksAboutOrientation) {
+    return "gender_orientation";
+  }
+  if (asksAboutGender) {
     return "gender";
+  }
+  if (
+    asksAboutOrientation &&
+    /\b(?:am i|i am|i'm|my)\b.{0,30}\b(?:gay|lesbian|bisexual|straight|queer|asexual|pansexual|sexual orientation|sexuality)\b/.test(
+      normalized,
+    )
+  ) {
+    return "orientation";
   }
   if (
     /\bwho am i\b|\bmy profile\b|\bmy account details\b|\bmy information\b|\bwhat do you know about me\b|\btell me about myself\b/.test(
@@ -208,6 +227,16 @@ function formatDueDate(value) {
 }
 
 function buildBorrowerProfileAnswer(profileField, profile = {}) {
+  if (profileField === "orientation") {
+    return "Your Lendy profile does not store sexual orientation, so I can't determine whether you are gay.";
+  }
+  if (profileField === "gender_orientation") {
+    const gender = typeof profile.gender === "string" && profile.gender.trim()
+      ? `Your Lendy profile lists your gender as ${profile.gender.trim()}. `
+      : "Your Lendy profile does not list a gender. ";
+    return `${gender}Gender is different from sexual orientation, and your profile does not store sexual orientation, so I can't determine whether you are gay.`;
+  }
+
   const fields = {
     name: ["name", "name"],
     email: ["email", "email address"],

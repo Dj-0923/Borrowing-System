@@ -159,6 +159,7 @@ test("profile questions resolve only to supported fields on the signed-in user's
     ["What is my year level?", "yearLevel", "3rd year"],
     ["What is my block?", "block", "1"],
     ["What is my gender?", "gender", "Female"],
+    ["What gender am I?", "gender", "Female"],
   ];
 
   for (const [question, field, value] of questions) {
@@ -173,6 +174,37 @@ test("profile questions resolve only to supported fields on the signed-in user's
     assert.match(answer, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.deepEqual(items, []);
   }
+});
+
+test("gender questions do not infer sexual orientation from the profile", () => {
+  const profile = { gender: "Female" };
+  for (const question of [
+    "What gender I am? Gay?",
+    "What gender I am, is it gay?",
+  ]) {
+    const classification = fallbackBorrowerIntent(question, equipment);
+    assert.equal(classification.intent, "my_profile");
+    assert.equal(classification.profileField, "gender_orientation");
+    const { answer } = buildBorrowerAssistantResponse({
+      intent: classification.intent,
+      profileField: classification.profileField,
+      personalProfile: profile,
+    });
+    assert.match(answer, /gender as Female/i);
+    assert.match(answer, /does not store sexual orientation/i);
+    assert.match(answer, /can't determine whether you are gay/i);
+  }
+
+  const orientationQuestion = fallbackBorrowerIntent("Am I gay?", equipment);
+  assert.equal(orientationQuestion.intent, "my_profile");
+  assert.equal(orientationQuestion.profileField, "orientation");
+  const { answer } = buildBorrowerAssistantResponse({
+    intent: orientationQuestion.intent,
+    profileField: orientationQuestion.profileField,
+    personalProfile: profile,
+  });
+  assert.match(answer, /does not store sexual orientation/i);
+  assert.doesNotMatch(answer, /gender as Female/i);
 });
 
 test("profile summaries omit contact, ID, and gender fields unless specifically requested", () => {
