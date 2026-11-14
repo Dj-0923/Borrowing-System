@@ -3,7 +3,7 @@
 const activeLoanStatuses = new Set(["approved", "return_pending"]);
 
 function borrowerAnswerLanguage(question) {
-  return /\b(?:ano|anong|paano|pano|sino|alin|saan|kailan|kelan|ko|ako|akin|mo|mga|pwede|puwede|pwedeng|puwedeng|hiram|hiramin|hihiram|ibalik|kailangan|gusto|hanap|meron|yung|dapat|hindi|ba|pangalan|kasarian)\b/i.test(
+  return /\b(?:ano|anong|paano|pano|sino|alin|saan|kailan|kelan|ko|ako|akin|mo|mga|pwede|puwede|pwedeng|puwedeng|hiram|hiramin|hihiram|ibalik|kailangan|gusto|hanap|meron|yung|dapat|hindi|ba|pangalan|kasarian|edad)\b/i.test(
     question,
   )
     ? "filipino"
@@ -184,7 +184,35 @@ function borrowerProfileField(question) {
     return "orientation";
   }
   if (
-    /\bwho am i\b|\bmy profile\b|\bmy account details\b|\bmy information\b|\bwhat do you know about me\b|\btell me about myself\b|\bsino ako\b|\b(?:ano|anong) (?:mga )?(?:info|information|details) ko\b|\bprofile ko\b|\banong alam mo tungkol sa akin\b/.test(
+    /\b(?:account|profile)\s+status\b|\bstatus\s+(?:ng|of)\s+(?:my|account ko)\b|\bactive ba (?:ang )?account ko\b|\bis my account active\b|\baccount ko ba ay active\b/.test(
+      normalized,
+    )
+  ) {
+    return "accountStatus";
+  }
+  if (
+    /\bhow old am i\b|\bmy age\b|\bdate of birth\b|\bmy birthday\b|\bmy phone(?: number)?\b|\bmy address\b|\bmy height\b|\bedad ko\b|\b(?:ano|anong) (?:ang )?(?:edad|birthday|phone number|address) ko\b|\bilang taon na ako\b/.test(
+      normalized,
+    )
+  ) {
+    return "notStored";
+  }
+  if (
+    /\b(?:my|account)\s+password\b|\bpassword ko\b|\b(?:ano|anong)\s+(?:ang\s+)?password ko\b/.test(
+      normalized,
+    )
+  ) {
+    return "credentials";
+  }
+  if (
+    /\b(?:my|account)\s+(?:profile )?(?:photo|picture|image|avatar)\b|\b(?:profile )?(?:photo|picture|image|avatar) ko\b|\bdo i have (?:a )?(?:profile )?(?:photo|picture|image|avatar)\b|\blarawan ko\b/.test(
+      normalized,
+    )
+  ) {
+    return "profilePhoto";
+  }
+  if (
+    /\bwho am i\b|\bmy profile\b|\bmy account details\b|\bmy (?:personal )?(?:information|info|data|details)\b|\bwhat do you know about me\b|\beverything you know about me\b|\bwhat (?:information|info|data|details) (?:do you have|is saved|do you store) about me\b|\b(?:what|tell me|show me|list) .{0,30}(?:information|info|details|data).{0,30}(?:about me|my account|my profile)\b|\btell me about myself\b|\blist all my (?:account )?(?:details|information|info)\b|\bsino ako\b|\b(?:ano|anong)\b.{0,50}\b(?:info|information|details|data)\b.{0,50}\b(?:ko|akin|account ko|profile ko)\b|\b(?:lahat ng )?(?:info|information|details|data) ng profile ko\b|\bprofile ko\b|\banong alam mo tungkol sa akin\b|\binformation about my account\b/.test(
       normalized,
     )
   ) {
@@ -311,6 +339,27 @@ function buildBorrowerProfileAnswer(
   language = "english",
 ) {
   const filipino = language === "filipino";
+  if (profileField === "notStored") {
+    return filipino
+      ? "Walang naka-save na impormasyong iyon sa Lendy profile mo."
+      : "That information is not saved in your Lendy profile.";
+  }
+  if (profileField === "credentials") {
+    return filipino
+      ? "Hindi ko makikita o maibibigay ang password mo. Para mapalitan ito, gamitin ang Forgot Password o ang password settings sa account mo."
+      : "I can't view or provide your password. Use Forgot Password or your account's password settings to change it.";
+  }
+  if (profileField === "profilePhoto") {
+    const hasPhoto = typeof profile.profileImage === "string" &&
+      profile.profileImage.startsWith("data:image/");
+    return filipino
+      ? hasPhoto
+        ? "May naka-save na profile photo sa account mo, pero hindi ko ito nasusuri o nailalarawan sa chat."
+        : "Walang naka-save na profile photo sa account mo."
+      : hasPhoto
+        ? "Your account has a saved profile photo, but I can't inspect or describe it in this chat."
+        : "There is no profile photo saved on your account.";
+  }
   if (profileField === "orientation") {
     return filipino
       ? "Walang naka-save na sexual orientation sa Lendy profile mo, kaya hindi ko masasabi kung gay ka o hindi."
@@ -338,29 +387,47 @@ function buildBorrowerProfileAnswer(
     yearLevel: ["yearLevel", "year level"],
     block: ["block", "block"],
     gender: ["gender", "gender"],
+    accountStatus: ["status", filipino ? "account status" : "account status"],
   };
   if (profileField === "summary") {
     const labels = filipino
       ? {
           name: "Pangalan",
+          email: "Email",
+          idNumber: "Student ID",
           role: "Role",
+          gender: "Gender",
           college: "College/course",
           yearLevel: "Year level",
           block: "Block",
+          status: "Account status",
         }
       : {
           name: "Name",
+          email: "Email",
+          idNumber: "Student ID",
           role: "Role",
+          gender: "Gender",
           college: "College/course",
           yearLevel: "Year level",
           block: "Block",
+          status: "Account status",
         };
     const details = [
       typeof profile.name === "string" && profile.name.trim()
         ? `${labels.name}: ${profile.name.trim()}`
         : "",
+      typeof profile.email === "string" && profile.email.trim()
+        ? `${labels.email}: ${profile.email.trim()}`
+        : "",
+      typeof profile.idNumber === "string" && profile.idNumber.trim()
+        ? `${labels.idNumber}: ${profile.idNumber.trim()}`
+        : "",
       typeof profile.role === "string" && profile.role.trim()
         ? `${labels.role}: ${profile.role.trim()}`
+        : "",
+      typeof profile.gender === "string" && profile.gender.trim()
+        ? `${labels.gender}: ${profile.gender.trim()}`
         : "",
       typeof (profile.college || profile.course) === "string" &&
           (profile.college || profile.course).trim()
@@ -371,6 +438,15 @@ function buildBorrowerProfileAnswer(
         : "",
       typeof profile.block === "string" && profile.block.trim()
         ? `${labels.block}: ${profile.block.trim()}`
+        : "",
+      typeof profile.status === "string" && profile.status.trim()
+        ? `${labels.status}: ${profile.status.trim()}`
+        : "",
+      typeof profile.profileImage === "string" &&
+          profile.profileImage.startsWith("data:image/")
+        ? filipino
+          ? "Profile photo: May naka-save na larawan"
+          : "Profile photo: Saved"
         : "",
     ].filter(Boolean);
     return details.length

@@ -206,6 +206,7 @@ test("profile questions resolve only to supported fields on the signed-in user's
     yearLevel: "3rd year",
     block: "1",
     gender: "Female",
+    status: "active",
   };
   const questions = [
     ["What is my name?", "name", "Jamie Rivera"],
@@ -217,6 +218,7 @@ test("profile questions resolve only to supported fields on the signed-in user's
     ["What is my block?", "block", "1"],
     ["What is my gender?", "gender", "Female"],
     ["What gender am I?", "gender", "Female"],
+    ["What is my account status?", "accountStatus", "active"],
   ];
 
   for (const [question, field, value] of questions) {
@@ -231,6 +233,83 @@ test("profile questions resolve only to supported fields on the signed-in user's
     assert.match(answer, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.deepEqual(items, []);
   }
+});
+
+test("varied profile questions return a complete safe summary from the user's own record", () => {
+  for (const question of [
+    "What information do you have about my account?",
+    "List all my account details",
+    "Ano ang lahat ng impormasyon sa profile ko?",
+    "Anong info ang meron ka tungkol sa akin?",
+  ]) {
+    assert.equal(borrowerProfileField(question), "summary");
+  }
+
+  const { answer } = buildBorrowerAssistantResponse({
+    intent: "my_profile",
+    profileField: "summary",
+    personalProfile: {
+      name: "Jamie Rivera",
+      email: "jamie@example.test",
+      idNumber: "STU-12345",
+      role: "student",
+      gender: "Female",
+      college: "BSIT",
+      yearLevel: "3rd year",
+      block: "1",
+      status: "active",
+      profileImage: "data:image/jpeg;base64,private-image-data",
+      mustChangePassword: true,
+    },
+  });
+
+  for (const fact of [
+    "Jamie Rivera",
+    "jamie@example.test",
+    "STU-12345",
+    "student",
+    "Female",
+    "BSIT",
+    "3rd year",
+    "Block: 1",
+    "Account status: active",
+    "Profile photo: Saved",
+  ]) {
+    assert.match(answer, new RegExp(fact.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.doesNotMatch(answer, /private-image-data|mustChangePassword/);
+});
+
+test("password and photo questions avoid exposing credentials or image contents", () => {
+  const ageIntent = fallbackBorrowerIntent("How old am I?", []);
+  assert.equal(ageIntent.profileField, "notStored");
+  const age = buildBorrowerAssistantResponse({
+    intent: "my_profile",
+    profileField: ageIntent.profileField,
+    personalProfile: {},
+  });
+  assert.match(age.answer, /not saved in your Lendy profile/i);
+
+  const passwordIntent = fallbackBorrowerIntent("Ano password ko?", []);
+  assert.equal(passwordIntent.profileField, "credentials");
+  const password = buildBorrowerAssistantResponse({
+    intent: "my_profile",
+    profileField: passwordIntent.profileField,
+    personalProfile: { password: "never-expose-this" },
+    language: "filipino",
+  });
+  assert.match(password.answer, /Hindi ko makikita o maibibigay ang password/i);
+  assert.doesNotMatch(password.answer, /never-expose-this/);
+
+  const photoIntent = fallbackBorrowerIntent("Do I have a profile photo?", []);
+  assert.equal(photoIntent.profileField, "profilePhoto");
+  const photo = buildBorrowerAssistantResponse({
+    intent: "my_profile",
+    profileField: photoIntent.profileField,
+    personalProfile: { profileImage: "data:image/jpeg;base64,private-image-data" },
+  });
+  assert.match(photo.answer, /saved profile photo/i);
+  assert.doesNotMatch(photo.answer, /private-image-data/);
 });
 
 test("profile answers follow the language of a Tagalog question", () => {
@@ -311,7 +390,7 @@ test("grounded item answers include only real item cards and use the supplied fa
   assert.equal(items[0].status, "Borrowed");
 });
 
-test("profile summaries omit contact, ID, and gender fields unless specifically requested", () => {
+test("profile summaries include the user's saved profile information", () => {
   const { answer } = buildBorrowerAssistantResponse({
     intent: "my_profile",
     profileField: borrowerProfileField("tell me about myself"),
@@ -324,12 +403,16 @@ test("profile summaries omit contact, ID, and gender fields unless specifically 
       yearLevel: "3rd year",
       block: "1",
       gender: "Female",
+      status: "active",
     },
   });
 
   assert.match(answer, /Jamie Rivera/);
+  assert.match(answer, /jamie@example\.test/);
+  assert.match(answer, /STU-12345/);
+  assert.match(answer, /Female/);
+  assert.match(answer, /Account status: active/);
   assert.match(answer, /BSIT/);
-  assert.doesNotMatch(answer, /jamie@example\.test|STU-12345|Female/);
 });
 
 test("loan deadlines use only the supplied personal loans that are still active", () => {

@@ -184,6 +184,9 @@ receive a message explaining the assistant's Lendy-only scope rather than a
 generated answer. When Gemini is not configured or unavailable, limited
 keyword matching is used for supported inventory and account questions. The
 borrower endpoint is separate from the admin-only `/assistant` endpoint.
+Profile summaries may include the signed-in user's saved contact and student
+details, but never expose passwords, internal authentication IDs, or raw image
+data.
 
 The service account must be able to manage Firebase Authentication users and
 read/write Firestore. Grant only the permissions needed for those tasks. The
