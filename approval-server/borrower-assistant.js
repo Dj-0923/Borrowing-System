@@ -442,12 +442,6 @@ function buildBorrowerProfileAnswer(
       typeof profile.status === "string" && profile.status.trim()
         ? `${labels.status}: ${profile.status.trim()}`
         : "",
-      typeof profile.profileImage === "string" &&
-          profile.profileImage.startsWith("data:image/")
-        ? filipino
-          ? "Profile photo: May naka-save na larawan"
-          : "Profile photo: Saved"
-        : "",
     ].filter(Boolean);
     return details.length
       ? filipino
