@@ -160,6 +160,26 @@ before enabling it. If the key is missing or the free quota is exhausted, the
 existing local answers continue to work, but questions requiring AI will show
 an error.
 
+### Mobile borrower assistant
+
+The Browse screen's AI Assistant button uses the separate
+`POST /borrower-assistant` endpoint on the approval service. Deploy the updated
+`approval-server` to Render before expecting the mobile assistant to work; the
+existing service URL is already configured in the app. The endpoint requires a
+valid Firebase ID token and an active student or faculty account, limits
+questions to 200 characters, and applies a per-account request limit.
+
+The service sends only the sanitized question and backend-defined equipment
+category labels to Gemini for intent classification; inventory records and
+loan records are never sent to Gemini. Answers about item names, availability,
+and status are built from Firestore inventory and active loans, then returned
+as item cards. Request buttons open the existing request form and are enabled
+only for available items. Due dates, when requested, are read only from loans
+whose `borrowerUid` matches the signed-in user. Unrelated questions receive a
+message explaining the assistant's Lendy-only scope rather than a generated
+answer. Without `GEMINI_API_KEY`, limited keyword matching is used. The
+borrower endpoint is separate from the admin-only `/assistant` endpoint.
+
 The service account must be able to manage Firebase Authentication users and
 read/write Firestore. Grant only the permissions needed for those tasks. The
 service handles admin-approved account activation and confirmed full-account

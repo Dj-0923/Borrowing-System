@@ -1,6 +1,11 @@
 const { initializeApp, cert } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const {
+  buildBorrowerAssistantResponse,
+  fallbackBorrowerIntent,
+} = require("./borrower-assistant");
+const { isAllowedApiRequest } = require("./request-origin");
 const { createHash, randomBytes, timingSafeEqual } = require("node:crypto");
 const http = require("node:http");
 const fs = require("node:fs/promises");
@@ -88,10 +93,6 @@ function sendJson(response, status, body, origin) {
   response.end(JSON.stringify(body));
 }
 
-function isLocalDevelopmentOrigin(origin) {
-  return /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/.test(origin);
-}
-
 async function serveAdminFile(request, response) {
   if (request.method !== "GET" && request.method !== "HEAD") return false;
 
@@ -170,6 +171,30 @@ async function requireAdmin(request) {
   const admin = await db.collection("admins").doc(decodedToken.uid).get();
   if (!admin.exists || admin.data().role !== "admin") {
     throw new HttpError(403, "Admin access is required.");
+  }
+  return decodedToken.uid;
+}
+
+async function requireBorrower(request) {
+  const authorization = request.headers.authorization || "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  if (!match) throw new HttpError(401, "Sign in to use the assistant.");
+
+  let decodedToken;
+  try {
+    decodedToken = await auth.verifyIdToken(match[1]);
+  } catch {
+    throw new HttpError(401, "Your sign-in has expired. Sign in again.");
+  }
+
+  const account = await db.collection("accounts").doc(decodedToken.uid).get();
+  const data = account.data();
+  if (
+    !account.exists ||
+    data?.status !== "active" ||
+    !["student", "faculty"].includes(data?.role)
+  ) {
+    throw new HttpError(403, "An active student or faculty account is required.");
   }
   return decodedToken.uid;
 }
@@ -1058,6 +1083,203 @@ const assistantOperations = new Set([
   "busiest_day",
 ]);
 const assistantRequests = new Map();
+const borrowerAssistantRequests = new Map();
+
+const borrowerAssistantIntents = new Set([
+  "how_to_borrow",
+  "suggest_item",
+  "available_items",
+  "inventory_list",
+  "item_status",
+  "my_loan_deadlines",
+  "unknown",
+]);
+
+function sanitizeBorrowerQuestion(question) {
+  return question
+    .replace(
+      /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+      "[EMAIL]",
+    )
+    .replace(/\+?\d(?:[\s().-]*\d){9,}/g, "[PHONE]")
+    .replace(/\b[A-F0-9]{28,}\b/gi, "[ID]");
+}
+
+async function classifyBorrowerQuestion(question, equipment) {
+  const fallback = fallbackBorrowerIntent(question, equipment);
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return fallback;
+
+  const categories = [...new Set(
+    equipment
+      .map((item) => item.category)
+      .filter((category) => typeof category === "string" && category.trim()),
+  )];
+  const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+  let response;
+  try {
+    response = await fetch(
+      "https://generativelanguage.googleapis.com/v1/interactions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({
+          model,
+          store: false,
+          input: [
+            "Classify the signed-in borrower's question and return only JSON.",
+            `Allowed intents: ${[...borrowerAssistantIntents].join(", ")}.`,
+            `Inventory categories from the backend: ${categories.join(", ") || "none"}.`,
+            "Choose my_loan_deadlines only for the signed-in user's own active loan deadlines.",
+            "Choose suggest_item whenever the user needs, wants, or is looking for equipment, including a use case. Infer a category only if it matches one of the backend categories above (for example, recording video can match a Camera category).",
+            "Choose available_items for availability, inventory_list when the user asks what equipment exists, and item_status when they ask about one item's status or condition.",
+            "Choose how_to_borrow for borrowing instructions. Choose unknown for general/off-topic questions; do not generate general answers.",
+            "Set category only to an exact value from the backend categories above; otherwise use an empty string. Set itemQuery to a short exact item name, tag, or ID mentioned by the user, or an empty string.",
+            "Question:",
+            sanitizeBorrowerQuestion(question),
+          ].join("\n"),
+          response_format: {
+            type: "text",
+            mime_type: "application/json",
+            schema: {
+              type: "object",
+              properties: {
+                intent: {
+                  type: "string",
+                  enum: [...borrowerAssistantIntents],
+                },
+                category: { type: "string" },
+                itemQuery: { type: "string", maxLength: 100 },
+              },
+              required: ["intent", "category", "itemQuery"],
+            },
+          },
+        }),
+      },
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.name === "TimeoutError" || error.name === "AbortError")
+    ) {
+      throw new HttpError(504, "The assistant timed out. Please try again.");
+    }
+    console.error("Could not reach Gemini for borrower intent classification.", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw new HttpError(502, "The assistant is temporarily unavailable.");
+  }
+
+  if (!response.ok) {
+    if (response.status === 429) {
+      throw new HttpError(429, "The assistant is busy. Please try again later.");
+    }
+    console.error("Gemini rejected a borrower assistant question.", {
+      status: response.status,
+      model,
+    });
+    throw new HttpError(502, "The assistant is temporarily unavailable.");
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new HttpError(502, "The assistant returned an invalid response.");
+  }
+  const text = payload.steps
+    ?.filter((step) => step.type === "model_output")
+    .flatMap((step) => step.content || [])
+    .filter((part) => part.type === "text")
+    .map((part) => part.text || "")
+    .join("");
+  let result;
+  try {
+    result = JSON.parse(text);
+  } catch {
+    throw new HttpError(502, "The assistant returned an invalid response.");
+  }
+  if (
+    !result ||
+    !borrowerAssistantIntents.has(result.intent) ||
+    typeof result.category !== "string" ||
+    result.category.length > 50 ||
+    typeof result.itemQuery !== "string" ||
+    result.itemQuery.length > 100 ||
+    (result.category &&
+      !equipment.some((item) => item.category === result.category))
+  ) {
+    throw new HttpError(502, "The assistant returned an invalid intent.");
+  }
+  return result;
+}
+
+async function answerBorrowerAssistant(data, borrowerUid) {
+  const question = data && data.question;
+  if (
+    typeof question !== "string" ||
+    question.trim().length === 0 ||
+    question.length > 200
+  ) {
+    throw new HttpError(400, "Enter a question of no more than 200 characters.");
+  }
+  const now = Date.now();
+  const recent = (borrowerAssistantRequests.get(borrowerUid) || [])
+    .filter((timestamp) => now - timestamp < 60_000);
+  if (recent.length >= 10) {
+    throw new HttpError(429, "Too many questions. Wait a minute and try again.");
+  }
+  borrowerAssistantRequests.set(borrowerUid, [...recent, now]);
+
+  const equipmentSnapshot = await db.collection("equipment").get();
+  const equipment = equipmentSnapshot.docs.map((document) => ({
+    ...document.data(),
+    id: document.id,
+  }));
+  const classification = await classifyBorrowerQuestion(
+    question.trim(),
+    equipment,
+  );
+  if (classification.intent === "my_loan_deadlines") {
+    const snapshot = await db.collection("loans")
+      .where("borrowerUid", "==", borrowerUid)
+      .get();
+    return {
+      ...buildBorrowerAssistantResponse({
+        intent: classification.intent,
+        personalLoans: snapshot.docs.map((document) => document.data()),
+      }),
+    };
+  }
+  if (
+    classification.intent === "available_items" ||
+    classification.intent === "suggest_item" ||
+    classification.intent === "inventory_list" ||
+    classification.intent === "item_status"
+  ) {
+    const [approvedLoans, returnPendingLoans] = await Promise.all([
+      db.collection("loans").where("status", "==", "approved").get(),
+      db.collection("loans").where("status", "==", "return_pending").get(),
+    ]);
+    return {
+      ...buildBorrowerAssistantResponse({
+        intent: classification.intent,
+        category: classification.category,
+        itemQuery: classification.itemQuery,
+        equipment,
+        activeLoans: [
+          ...approvedLoans.docs.map((document) => document.data()),
+          ...returnPendingLoans.docs.map((document) => document.data()),
+        ],
+      }),
+    };
+  }
+  return buildBorrowerAssistantResponse(classification);
+}
 
 function findEquipmentInQuestion(question, equipment) {
   return equipment.filter((item) => {
@@ -1546,17 +1768,13 @@ const server = http.createServer(async (request, response) => {
   }
 
   const origin = request.headers.origin;
-  const publicAppRoutes = new Set([
-    "/request-account",
-    "/account-request-status",
-  ]);
-  const isPublicAppRoute = publicAppRoutes.has(request.url);
-  const isLocalPublicAppOrigin =
-    isPublicAppRoute && origin && isLocalDevelopmentOrigin(origin);
-  const isPublicAppPost = request.method === "POST" && isPublicAppRoute;
   if (
-    (origin && !allowedOrigins.has(origin) && !isLocalPublicAppOrigin) ||
-    (!origin && !isPublicAppPost)
+    !isAllowedApiRequest({
+      origin,
+      method: request.method,
+      pathname: request.url,
+      allowedOrigins,
+    })
   ) {
     response.writeHead(403, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ error: "Origin is not allowed." }));
@@ -1588,6 +1806,7 @@ const server = http.createServer(async (request, response) => {
       "/reject-account",
       "/delete-account",
       "/assistant",
+      "/borrower-assistant",
     ].includes(request.url)
   ) {
     sendJson(response, 404, { error: "Endpoint not found." }, origin);
@@ -1602,6 +1821,16 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.url === "/account-request-status") {
       sendJson(response, 200, await getAccountRequestStatus(data), origin);
+      return;
+    }
+    if (request.url === "/borrower-assistant") {
+      const borrowerUid = await requireBorrower(request);
+      sendJson(
+        response,
+        200,
+        await answerBorrowerAssistant(data, borrowerUid),
+        origin,
+      );
       return;
     }
     const adminUid = await requireAdmin(request);
