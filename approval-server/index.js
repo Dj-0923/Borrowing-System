@@ -3,6 +3,7 @@ const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const {
   buildBorrowerAssistantResponse,
+  findInventoryCategory,
   fallbackBorrowerIntent,
 } = require("./borrower-assistant");
 const { isAllowedApiRequest } = require("./request-origin");
@@ -1126,7 +1127,7 @@ async function classifyBorrowerQuestion(question, equipment) {
           "Content-Type": "application/json",
           "x-goog-api-key": apiKey,
         },
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({
           model,
           store: false,
@@ -1166,30 +1167,33 @@ async function classifyBorrowerQuestion(question, equipment) {
       error instanceof Error &&
       (error.name === "TimeoutError" || error.name === "AbortError")
     ) {
-      throw new HttpError(504, "The assistant timed out. Please try again.");
+      console.warn("Gemini borrower classification timed out; using inventory-backed fallback.", {
+        model,
+      });
+      return fallback;
     }
-    console.error("Could not reach Gemini for borrower intent classification.", {
+    console.warn("Gemini borrower classification failed; using inventory-backed fallback.", {
       error: error instanceof Error ? error.message : String(error),
     });
-    throw new HttpError(502, "The assistant is temporarily unavailable.");
+    return fallback;
   }
 
   if (!response.ok) {
-    if (response.status === 429) {
-      throw new HttpError(429, "The assistant is busy. Please try again later.");
-    }
-    console.error("Gemini rejected a borrower assistant question.", {
+    console.warn("Gemini rejected borrower classification; using inventory-backed fallback.", {
       status: response.status,
       model,
     });
-    throw new HttpError(502, "The assistant is temporarily unavailable.");
+    return fallback;
   }
 
   let payload;
   try {
     payload = await response.json();
   } catch {
-    throw new HttpError(502, "The assistant returned an invalid response.");
+    console.warn("Gemini returned invalid borrower classification JSON; using fallback.", {
+      model,
+    });
+    return fallback;
   }
   const text = payload.steps
     ?.filter((step) => step.type === "model_output")
@@ -1201,7 +1205,10 @@ async function classifyBorrowerQuestion(question, equipment) {
   try {
     result = JSON.parse(text);
   } catch {
-    throw new HttpError(502, "The assistant returned an invalid response.");
+    console.warn("Gemini returned unparseable borrower classification; using fallback.", {
+      model,
+    });
+    return fallback;
   }
   if (
     !result ||
@@ -1209,13 +1216,28 @@ async function classifyBorrowerQuestion(question, equipment) {
     typeof result.category !== "string" ||
     result.category.length > 50 ||
     typeof result.itemQuery !== "string" ||
-    result.itemQuery.length > 100 ||
-    (result.category &&
-      !equipment.some((item) => item.category === result.category))
+    result.itemQuery.length > 100
   ) {
-    throw new HttpError(502, "The assistant returned an invalid intent.");
+    console.warn("Gemini returned an invalid borrower intent; using inventory-backed fallback.", {
+      model,
+    });
+    return fallback;
   }
-  return result;
+  if (result.intent === "unknown" && fallback.intent !== "unknown") {
+    return fallback;
+  }
+  const category = findInventoryCategory(result.category, equipment);
+  if (result.category && !category) {
+    console.warn("Gemini returned an unknown inventory category; using fallback.", {
+      model,
+    });
+    return fallback;
+  }
+  return {
+    ...result,
+    category: category || fallback.category || "",
+    itemQuery: result.itemQuery || fallback.itemQuery || "",
+  };
 }
 
 async function answerBorrowerAssistant(data, borrowerUid) {

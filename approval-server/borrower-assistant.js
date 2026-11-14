@@ -13,14 +13,10 @@ function fallbackBorrowerIntent(question, equipment) {
     equipment
       .map((item) => item.category)
       .filter((category) => typeof category === "string" && category.trim()),
-  )].find((category) => {
-    const categoryName = category.toLowerCase();
-    const singularCategory = categoryName.endsWith("s")
-      ? categoryName.slice(0, -1)
-      : categoryName;
-    return normalized.includes(categoryName) ||
-      normalized.includes(singularCategory);
-  }) || "";
+  )].find((category) =>
+    normalized.includes(category.toLowerCase()) ||
+    normalized.includes(normalizeCategory(category)),
+  ) || "";
 
   if (
     /\b(deadline|due date|return date|when.*return|my loans|my borrowings)\b/.test(
@@ -71,6 +67,21 @@ function fallbackBorrowerIntent(question, equipment) {
     return { intent: "how_to_borrow", category: "", itemQuery: "" };
   }
   return { intent: "unknown", category: "", itemQuery: "" };
+}
+
+function normalizeCategory(category) {
+  const normalized = category.trim().toLowerCase();
+  return normalized.endsWith("s") ? normalized.slice(0, -1) : normalized;
+}
+
+function findInventoryCategory(candidate, equipment) {
+  if (typeof candidate !== "string" || !candidate.trim()) return "";
+  const normalized = normalizeCategory(candidate);
+  return [...new Set(
+    equipment
+      .map((item) => item.category)
+      .filter((category) => typeof category === "string" && category.trim()),
+  )].find((category) => normalizeCategory(category) === normalized) || "";
 }
 
 function categoryMatches(item, category) {
@@ -239,5 +250,6 @@ function buildBorrowerAssistantResponse(input) {
 
 module.exports = {
   buildBorrowerAssistantResponse,
+  findInventoryCategory,
   fallbackBorrowerIntent,
 };

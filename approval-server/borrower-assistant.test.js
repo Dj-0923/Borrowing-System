@@ -5,6 +5,7 @@ const test = require("node:test");
 
 const {
   buildBorrowerAssistantResponse,
+  findInventoryCategory,
   fallbackBorrowerIntent,
 } = require("./borrower-assistant");
 
@@ -112,6 +113,11 @@ test("fallback classification extracts an inventory-backed item category", () =>
     category: "Cameras",
     itemQuery: "",
   });
+});
+
+test("category matching accepts singular Gemini labels but returns the backend category", () => {
+  assert.equal(findInventoryCategory("Camera", equipment), "Cameras");
+  assert.equal(findInventoryCategory("unknown item", equipment), "");
 });
 
 test("fallback classification refuses general questions rather than inventing answers", () => {
