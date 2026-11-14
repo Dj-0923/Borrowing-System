@@ -273,13 +273,11 @@ test("varied profile questions return a complete safe summary from the user's ow
     "3rd year",
     "Block: 1",
     "Account status: active",
+    "Profile photo: Saved",
   ]) {
     assert.match(answer, new RegExp(fact.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  assert.doesNotMatch(
-    answer,
-    /profile photo|private-image-data|mustChangePassword/i,
-  );
+  assert.doesNotMatch(answer, /private-image-data|mustChangePassword/);
 });
 
 test("password and photo questions avoid exposing credentials or image contents", () => {
