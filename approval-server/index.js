@@ -1109,7 +1109,12 @@ function sanitizeBorrowerQuestion(question) {
 
 async function classifyBorrowerQuestion(question, equipment) {
   const fallback = fallbackBorrowerIntent(question, equipment);
-  if (!isBorrowerDomainQuestion(question, equipment)) return fallback;
+  if (
+    fallback.intent === "my_profile" ||
+    !isBorrowerDomainQuestion(question, equipment)
+  ) {
+    return fallback;
+  }
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return fallback;
 
@@ -1138,7 +1143,6 @@ async function classifyBorrowerQuestion(question, equipment) {
             `Allowed intents: ${[...borrowerAssistantIntents].join(", ")}.`,
             `Inventory categories from the backend: ${categories.join(", ") || "none"}.`,
             "Read and analyze the entire question before choosing an intent; do not classify based only on the first word.",
-            "A generic question such as 'What is my name?' or 'Who are you?' is not an inventory question. Choose unknown; never return inventory results for personal or unrelated questions.",
             "Only use inventory intents when the question is actually about equipment, items, tools/devices, stock, availability, a known category/item, or a request/recommendation for something to borrow.",
             "Choose my_loan_deadlines only for the signed-in user's own active loan deadlines.",
             "Choose suggest_item whenever the user needs, wants, or is looking for equipment, including a use case. Infer a category only if it matches one of the backend categories above (for example, recording video can match a Camera category).",
@@ -1261,6 +1265,24 @@ async function answerBorrowerAssistant(data, borrowerUid) {
     throw new HttpError(429, "Too many questions. Wait a minute and try again.");
   }
   borrowerAssistantRequests.set(borrowerUid, [...recent, now]);
+
+  const profileIntent = fallbackBorrowerIntent(question.trim(), []);
+  if (profileIntent.intent === "my_profile") {
+    const snapshot = await db.collection("accounts").doc(borrowerUid).get();
+    const profile = snapshot.data();
+    if (
+      !snapshot.exists ||
+      profile?.status !== "active" ||
+      !["student", "faculty"].includes(profile?.role)
+    ) {
+      throw new HttpError(403, "An active student or faculty account is required.");
+    }
+    return buildBorrowerAssistantResponse({
+      intent: profileIntent.intent,
+      profileField: profileIntent.profileField,
+      personalProfile: profile,
+    });
+  }
 
   const equipmentSnapshot = await db.collection("equipment").get();
   const equipment = equipmentSnapshot.docs.map((document) => ({

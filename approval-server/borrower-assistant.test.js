@@ -5,6 +5,7 @@ const test = require("node:test");
 
 const {
   buildBorrowerAssistantResponse,
+  borrowerProfileField,
   findInventoryCategory,
   fallbackBorrowerIntent,
   isBorrowerDomainQuestion,
@@ -128,14 +129,71 @@ test("fallback classification refuses general questions rather than inventing an
   );
   assert.equal(
     fallbackBorrowerIntent("What is my name?", equipment).intent,
-    "unknown",
+    "my_profile",
   );
   assert.equal(
     fallbackBorrowerIntent("I am available tomorrow", equipment).intent,
     "unknown",
   );
-  assert.equal(isBorrowerDomainQuestion("What is my name?", equipment), false);
+  assert.equal(isBorrowerDomainQuestion("What is my name?", equipment), true);
   assert.equal(isBorrowerDomainQuestion("What tool can I borrow?", equipment), true);
+});
+
+test("profile questions resolve only to supported fields on the signed-in user's profile", () => {
+  const profile = {
+    name: "Jamie Rivera",
+    email: "jamie@example.test",
+    role: "student",
+    idNumber: "STU-12345",
+    college: "BSIT",
+    yearLevel: "3rd year",
+    block: "1",
+    gender: "Female",
+  };
+  const questions = [
+    ["What is my name?", "name", "Jamie Rivera"],
+    ["What is my email address?", "email", "jamie@example.test"],
+    ["Am I a student or faculty?", "role", "Student"],
+    ["What is my student number?", "idNumber", "STU-12345"],
+    ["What course am I taking?", "college", "BSIT"],
+    ["What is my year level?", "yearLevel", "3rd year"],
+    ["What is my block?", "block", "1"],
+    ["What is my gender?", "gender", "Female"],
+  ];
+
+  for (const [question, field, value] of questions) {
+    const classification = fallbackBorrowerIntent(question, equipment);
+    assert.equal(classification.intent, "my_profile");
+    assert.equal(borrowerProfileField(question.toLowerCase()), field);
+    const { answer, items } = buildBorrowerAssistantResponse({
+      intent: classification.intent,
+      profileField: classification.profileField,
+      personalProfile: profile,
+    });
+    assert.match(answer, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.deepEqual(items, []);
+  }
+});
+
+test("profile summaries omit contact, ID, and gender fields unless specifically requested", () => {
+  const { answer } = buildBorrowerAssistantResponse({
+    intent: "my_profile",
+    profileField: borrowerProfileField("tell me about myself"),
+    personalProfile: {
+      name: "Jamie Rivera",
+      email: "jamie@example.test",
+      role: "student",
+      idNumber: "STU-12345",
+      college: "BSIT",
+      yearLevel: "3rd year",
+      block: "1",
+      gender: "Female",
+    },
+  });
+
+  assert.match(answer, /Jamie Rivera/);
+  assert.match(answer, /BSIT/);
+  assert.doesNotMatch(answer, /jamie@example\.test|STU-12345|Female/);
 });
 
 test("loan deadlines use only the supplied personal loans that are still active", () => {

@@ -4,6 +4,10 @@ const activeLoanStatuses = new Set(["approved", "return_pending"]);
 
 function fallbackBorrowerIntent(question, equipment) {
   const normalized = question.toLowerCase();
+  const profileField = borrowerProfileField(normalized);
+  if (profileField) {
+    return { intent: "my_profile", profileField, category: "", itemQuery: "" };
+  }
   const mentionedItem = equipment.find((item) =>
     [item.name, item.id, item.tag]
       .filter((value) => typeof value === "string" && value.trim())
@@ -72,6 +76,46 @@ function fallbackBorrowerIntent(question, equipment) {
     };
   }
   return { intent: "unknown", category: "", itemQuery: "" };
+}
+
+function borrowerProfileField(question) {
+  const normalized = question.toLowerCase();
+  if (/\bmy\s+(?:full\s+)?name\b|\bwhat\s+is\s+my\s+name\b/.test(normalized)) {
+    return "name";
+  }
+  if (/\bmy\s+(?:email|email address)\b|\bwhat email (?:do i use|is on my account)\b/.test(normalized)) {
+    return "email";
+  }
+  if (/\bmy\s+role\b|\bam i (?:a )?(?:student|faculty)\b/.test(normalized)) {
+    return "role";
+  }
+  if (/\bmy\s+(?:id|identification|student)\s+number\b/.test(normalized)) {
+    return "idNumber";
+  }
+  if (
+    /\bmy\s+(?:college|course|program|major)\b|\bwhat (?:course|program|major|college) am i (?:taking|in|studying)\b/.test(
+      normalized,
+    )
+  ) {
+    return "college";
+  }
+  if (/\bmy\s+year(?:\s+level)?\b/.test(normalized)) {
+    return "yearLevel";
+  }
+  if (/\bmy\s+(?:block|section)\b/.test(normalized)) {
+    return "block";
+  }
+  if (/\bmy\s+gender\b/.test(normalized)) {
+    return "gender";
+  }
+  if (
+    /\bwho am i\b|\bmy profile\b|\bmy account details\b|\bmy information\b|\bwhat do you know about me\b|\btell me about myself\b/.test(
+      normalized,
+    )
+  ) {
+    return "summary";
+  }
+  return "";
 }
 
 function normalizeCategory(category) {
@@ -163,6 +207,56 @@ function formatDueDate(value) {
   }).format(date);
 }
 
+function buildBorrowerProfileAnswer(profileField, profile = {}) {
+  const fields = {
+    name: ["name", "name"],
+    email: ["email", "email address"],
+    role: ["role", "role"],
+    idNumber: ["idNumber", "ID number"],
+    college: ["college", "college or course"],
+    yearLevel: ["yearLevel", "year level"],
+    block: ["block", "block"],
+    gender: ["gender", "gender"],
+  };
+  if (profileField === "summary") {
+    const details = [
+      typeof profile.name === "string" && profile.name.trim()
+        ? `Name: ${profile.name.trim()}`
+        : "",
+      typeof profile.role === "string" && profile.role.trim()
+        ? `Role: ${profile.role.trim()}`
+        : "",
+      typeof (profile.college || profile.course) === "string" &&
+          (profile.college || profile.course).trim()
+        ? `College/course: ${(profile.college || profile.course).trim()}`
+        : "",
+      typeof profile.yearLevel === "string" && profile.yearLevel.trim()
+        ? `Year level: ${profile.yearLevel.trim()}`
+        : "",
+      typeof profile.block === "string" && profile.block.trim()
+        ? `Block: ${profile.block.trim()}`
+        : "",
+    ].filter(Boolean);
+    return details.length
+      ? `Here is the profile information on your account:\n${details.join("\n")}`
+      : "Your Lendy profile does not have those details saved yet.";
+  }
+
+  const field = fields[profileField];
+  if (!field) {
+    return "I can answer questions about the profile information on your own Lendy account.";
+  }
+  const [key, label] = field;
+  const value = profile[key] || (key === "college" ? profile.course : "");
+  if (typeof value !== "string" || !value.trim()) {
+    return `Your ${label} is not listed in your Lendy profile.`;
+  }
+  const displayValue = key === "role"
+    ? value.charAt(0).toUpperCase() + value.slice(1)
+    : value.trim();
+  return `Your ${label} on your Lendy profile is ${displayValue}.`;
+}
+
 function buildBorrowerAssistantAnswer({
   intent,
   category = "",
@@ -170,7 +264,13 @@ function buildBorrowerAssistantAnswer({
   equipment = [],
   activeLoans = [],
   personalLoans = [],
+  profileField = "",
+  personalProfile = {},
 }) {
+  if (intent === "my_profile") {
+    return buildBorrowerProfileAnswer(profileField, personalProfile);
+  }
+
   if (intent === "how_to_borrow") {
     return "Open Browse, choose an available item, and tap Request. Select your borrow and return dates, then submit the request. You can track its approval in Loans. After approval, check out the item and report its return when you are done.";
   }
@@ -259,6 +359,7 @@ function buildBorrowerAssistantResponse(input) {
 
 module.exports = {
   buildBorrowerAssistantResponse,
+  borrowerProfileField,
   findInventoryCategory,
   fallbackBorrowerIntent,
   isBorrowerDomainQuestion,
