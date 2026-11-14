@@ -22,8 +22,15 @@ function fallbackBorrowerIntent(question, equipment) {
     normalized.includes(normalizeCategory(category)),
   ) || "";
 
-  if (/\b(deadline|due date|return date|my loans|my borrowings)\b/.test(normalized)) {
+  if (/\b(deadline|due date|return date|when .* due)\b/.test(normalized)) {
     return { intent: "my_loan_deadlines", category: "", itemQuery: "" };
+  }
+  if (
+    /\b(?:my|mine|me|i)\b.{0,35}\b(?:loans?|requests?|borrowed|borrowing|checked out)\b|\bwhat (?:did|have) i borrow\b/.test(
+      normalized,
+    )
+  ) {
+    return { intent: "my_loans", category: "", itemQuery: "" };
   }
   const hasInventoryContext =
     Boolean(mentionedItem || mentionedCategory) ||
@@ -54,7 +61,20 @@ function fallbackBorrowerIntent(question, equipment) {
     };
   }
   if (
-    /\b(list|show|what|which|catalog|inventory|all items|items list)\b/.test(
+    mentionedItem ||
+    (mentionedCategory &&
+      /\b(?:tell me about|describe|explain|details?|information|features?|specs?|specifications?|what (?:is|are)|which)\b/.test(
+        normalized,
+      ))
+  ) {
+    return {
+      intent: "item_question",
+      category: mentionedCategory,
+      itemQuery: mentionedItem?.name || "",
+    };
+  }
+  if (
+    /\b(?:list|show|catalog|inventory|all items|items list)\b|\b(?:what|which)\s+(?:items?|equipment|tools?|devices?)\b/.test(
       normalized,
     )
   ) {
@@ -197,6 +217,26 @@ function itemStatus(item, activeLoans) {
   return "Available";
 }
 
+function loanStatusLabel(loan) {
+  if (loan.status === "approved" && loan.checkedOutAt) return "Borrowed";
+  switch (loan.status) {
+    case "pending":
+      return "Pending approval";
+    case "approved":
+      return "Approved";
+    case "return_pending":
+      return "Return awaiting verification";
+    case "returned":
+      return "Returned";
+    case "rejected":
+      return "Rejected";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return "Unknown status";
+  }
+}
+
 function matchingItems(equipment, category, itemQuery) {
   const normalizedQuery = (itemQuery || "").trim().toLowerCase();
   return equipment.filter((item) => {
@@ -286,6 +326,36 @@ function buildBorrowerProfileAnswer(profileField, profile = {}) {
   return `Your ${label} on your Lendy profile is ${displayValue}.`;
 }
 
+function buildItemQuestionAnswer({
+  category = "",
+  itemQuery = "",
+  equipment = [],
+  activeLoans = [],
+}) {
+  const matches = matchingItems(equipment, category, itemQuery).slice(0, 5);
+  if (matches.length === 0) {
+    return itemQuery
+      ? `I couldn't find an item matching "${itemQuery}" in the Lendy inventory.`
+      : "I couldn't find a matching item in the Lendy inventory.";
+  }
+  const details = matches.map((item) => {
+    const facts = [
+      item.category,
+      item.tag ? `Code: ${item.tag}` : "",
+      item.location ? `Location: ${item.location}` : "",
+      `Status: ${itemStatus(item, activeLoans)}`,
+      item.brand,
+      item.model,
+      item.condition,
+      item.description,
+      item.specifications || item.specs,
+      Array.isArray(item.features) ? item.features.join(", ") : item.features,
+    ].filter((value) => typeof value === "string" && value.trim());
+    return `${item.name || "Unnamed item"} — ${facts.join("; ")}`;
+  });
+  return `Here is the information recorded in Lendy:\n${details.join("\n")}\nI can only confirm details saved in the inventory.`;
+}
+
 function buildBorrowerAssistantAnswer({
   intent,
   category = "",
@@ -295,6 +365,7 @@ function buildBorrowerAssistantAnswer({
   personalLoans = [],
   profileField = "",
   personalProfile = {},
+  answer = "",
 }) {
   if (intent === "my_profile") {
     return buildBorrowerProfileAnswer(profileField, personalProfile);
@@ -317,6 +388,30 @@ function buildBorrowerAssistantAnswer({
           `${loan.name || "Unnamed item"} — due ${formatDueDate(loan.end)}`,
       )
       .join("\n")}`;
+  }
+
+  if (intent === "my_loans") {
+    const loans = [...personalLoans]
+      .sort((a, b) => String(b.start || "").localeCompare(String(a.start || "")))
+      .slice(0, 20);
+    if (loans.length === 0) {
+      return "I couldn't find any loan or request records for your account.";
+    }
+    return `Your Lendy loan/request records:\n${loans
+      .map((loan) => {
+        const dueDate = loan.end ? ` — return date ${formatDueDate(loan.end)}` : "";
+        return `${loan.name || "Unnamed item"} — ${loanStatusLabel(loan)}${dueDate}`;
+      })
+      .join("\n")}${personalLoans.length > loans.length ? "\nShowing the 20 most recent records." : ""}`;
+  }
+
+  if (intent === "item_question") {
+    return answer.trim() || buildItemQuestionAnswer({
+      category,
+      itemQuery,
+      equipment,
+      activeLoans,
+    });
   }
 
   if (intent === "inventory_list" || intent === "item_status") {
@@ -355,7 +450,7 @@ function buildBorrowerAssistantAnswer({
     return "Here are some available matches. Tap Request on an item to choose your dates.";
   }
 
-  return "I can only answer questions using Lendy's equipment and loan data. Ask what items are in the inventory, which are available, or the current status of an item.";
+  return "I can help with Lendy's equipment, your profile, and your own loan/request records. I can only confirm information saved in Lendy, so I won't guess when a detail isn't available.";
 }
 
 function buildBorrowerAssistantResponse(input) {
@@ -374,6 +469,11 @@ function buildBorrowerAssistantResponse(input) {
     input.intent === "inventory_list" || input.intent === "item_status"
       ? matchingItems(input.equipment, input.category, input.itemQuery)
           .slice(0, 20)
+      : input.intent === "item_question" && Array.isArray(input.itemIds)
+        ? input.equipment.filter((item) => input.itemIds.includes(item.id))
+            .slice(0, 10)
+      : input.intent === "item_question"
+        ? matchingItems(input.equipment, input.category, input.itemQuery).slice(0, 5)
       : availableItemResults;
   const items = itemResults.map((item) => ({
     id: item.id,
@@ -392,4 +492,5 @@ module.exports = {
   findInventoryCategory,
   fallbackBorrowerIntent,
   isBorrowerDomainQuestion,
+  itemStatus,
 };

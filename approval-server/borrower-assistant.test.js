@@ -117,6 +117,25 @@ test("fallback classification extracts an inventory-backed item category", () =>
   });
 });
 
+test("fallback classification recognizes item detail and personal loan questions", () => {
+  for (const question of [
+    "Tell me about the Sony Camera",
+    "What is the Sony Camera?",
+  ]) {
+    const itemQuestion = fallbackBorrowerIntent(question, equipment);
+    assert.equal(itemQuestion.intent, "item_question");
+    assert.equal(itemQuestion.itemQuery, "Sony Camera");
+  }
+  assert.equal(
+    fallbackBorrowerIntent("What are my loans?", equipment).intent,
+    "my_loans",
+  );
+  assert.equal(
+    fallbackBorrowerIntent("When are my loans due?", equipment).intent,
+    "my_loan_deadlines",
+  );
+});
+
 test("category matching accepts singular Gemini labels but returns the backend category", () => {
   assert.equal(findInventoryCategory("Camera", equipment), "Cameras");
   assert.equal(findInventoryCategory("unknown item", equipment), "");
@@ -207,6 +226,20 @@ test("gender questions do not infer sexual orientation from the profile", () => 
   assert.doesNotMatch(answer, /gender as Female/i);
 });
 
+test("grounded item answers include only real item cards and use the supplied facts", () => {
+  const { answer, items } = buildBorrowerAssistantResponse({
+    intent: "item_question",
+    answer: "The Sony Camera is in the AV Room and is currently borrowed.",
+    itemIds: ["camera-1", "unknown-item"],
+    equipment,
+    activeLoans: [{ equipmentId: "camera-1", status: "approved" }],
+  });
+
+  assert.match(answer, /AV Room/);
+  assert.deepEqual(items.map((item) => item.id), ["camera-1"]);
+  assert.equal(items[0].status, "Borrowed");
+});
+
 test("profile summaries omit contact, ID, and gender fields unless specifically requested", () => {
   const { answer } = buildBorrowerAssistantResponse({
     intent: "my_profile",
@@ -244,12 +277,26 @@ test("loan deadlines use only the supplied personal loans that are still active"
   assert.deepEqual(items, []);
 });
 
+test("loan history answers include only the supplied personal records", () => {
+  const { answer } = buildBorrowerAssistantResponse({
+    intent: "my_loans",
+    personalLoans: [
+      { name: "Camera", start: "2026-11-12", end: "2026-11-15", status: "approved" },
+      { name: "Projector", start: "2026-10-12", status: "returned" },
+    ],
+  });
+
+  assert.match(answer, /Camera — Approved/);
+  assert.match(answer, /return date November 15, 2026/);
+  assert.match(answer, /Projector — Returned/);
+});
+
 test("unrelated questions are restricted to inventory-backed answers", () => {
   const response = buildBorrowerAssistantResponse({
     intent: "unknown",
   });
 
-  assert.match(response.answer, /only answer questions using Lendy's equipment and loan data/i);
+  assert.match(response.answer, /Lendy's equipment, your profile, and your own loan\/request records/i);
   assert.deepEqual(response.items, []);
 });
 

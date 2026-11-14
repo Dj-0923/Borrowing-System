@@ -169,19 +169,20 @@ existing service URL is already configured in the app. The endpoint requires a
 valid Firebase ID token and an active student or faculty account, limits
 questions to 200 characters, and applies a per-account request limit.
 
-The service sends only the sanitized question and backend-defined equipment
-category labels to Gemini for intent classification; inventory records and
-loan records are never sent to Gemini. Answers about item names, availability,
-and status are built from Firestore inventory and active loans, then returned
-as item cards. Request buttons open the existing request form and are enabled
-only for available items. Due dates, when requested, are read only from loans
-whose `borrowerUid` matches the signed-in user. Unrelated questions receive a
-message explaining the assistant's Lendy-only scope rather than a generated
-answer. Profile questions read only the signed-in user's `accounts/{uid}`
-document after verifying the Firebase token; profile values are not sent to
-Gemini. When Gemini is not configured or unavailable, limited keyword matching
-is used for supported inventory questions. The borrower endpoint is separate
-from the admin-only `/assistant` endpoint.
+Gemini receives the sanitized question and allowlisted equipment facts
+(name, category, code, location, status, and supported descriptive fields) so
+it can answer natural-language inventory questions. Images, account profiles,
+and individual loan records are not sent to Gemini. The service derives item
+statuses from Firestore and validates every returned item ID against the
+inventory before showing item cards. Request buttons open the existing request
+form and are enabled only for available items. Questions about the user's
+profile read only `accounts/{uid}` for the verified Firebase token; questions
+about requests and due dates read only loans whose `borrowerUid` matches that
+user. Unrelated questions receive a message explaining the assistant's
+Lendy-only scope rather than a generated answer. When Gemini is not configured
+or unavailable, limited keyword matching is used for supported inventory and
+account questions. The borrower endpoint is separate from the admin-only
+`/assistant` endpoint.
 
 The service account must be able to manage Firebase Authentication users and
 read/write Firestore. Grant only the permissions needed for those tasks. The
