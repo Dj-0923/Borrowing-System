@@ -178,11 +178,12 @@ inventory before showing item cards. Request buttons open the existing request
 form and are enabled only for available items. Questions about the user's
 profile read only `accounts/{uid}` for the verified Firebase token; questions
 about requests and due dates read only loans whose `borrowerUid` matches that
-user. Unrelated questions receive a message explaining the assistant's
-Lendy-only scope rather than a generated answer. When Gemini is not configured
-or unavailable, limited keyword matching is used for supported inventory and
-account questions. The borrower endpoint is separate from the admin-only
-`/assistant` endpoint.
+user. The assistant understands English, Filipino/Tagalog, and Taglish and
+aims to answer in the language and style of the question. Unrelated questions
+receive a message explaining the assistant's Lendy-only scope rather than a
+generated answer. When Gemini is not configured or unavailable, limited
+keyword matching is used for supported inventory and account questions. The
+borrower endpoint is separate from the admin-only `/assistant` endpoint.
 
 The service account must be able to manage Firebase Authentication users and
 read/write Firestore. Grant only the permissions needed for those tasks. The

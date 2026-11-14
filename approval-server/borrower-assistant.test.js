@@ -5,6 +5,7 @@ const test = require("node:test");
 
 const {
   buildBorrowerAssistantResponse,
+  borrowerAnswerLanguage,
   borrowerProfileField,
   findInventoryCategory,
   fallbackBorrowerIntent,
@@ -117,6 +118,43 @@ test("fallback classification extracts an inventory-backed item category", () =>
   });
 });
 
+test("Tagalog and Taglish profile, inventory, borrowing, and loan questions are understood", () => {
+  const profileQuestion = fallbackBorrowerIntent("Ano pangalan ko?", equipment);
+  assert.equal(profileQuestion.intent, "my_profile");
+  assert.equal(profileQuestion.profileField, "name");
+  assert.equal(borrowerAnswerLanguage("Ano pangalan ko?"), "filipino");
+
+  assert.equal(
+    fallbackBorrowerIntent("Ano mga item ang available?", equipment).intent,
+    "available_items",
+  );
+  assert.equal(
+    fallbackBorrowerIntent("Anong item ang pwede kong hiramin?", equipment).intent,
+    "available_items",
+  );
+  assert.equal(
+    fallbackBorrowerIntent("Paano ako mag-borrow?", equipment).intent,
+    "how_to_borrow",
+  );
+  assert.equal(
+    fallbackBorrowerIntent("Kailangan ko ng camera", equipment).intent,
+    "suggest_item",
+  );
+  assert.equal(
+    fallbackBorrowerIntent("Kailangan ko ng Sony Camera", equipment).intent,
+    "suggest_item",
+  );
+  assert.equal(
+    fallbackBorrowerIntent("Kailan ko ibabalik ang camera?", equipment).intent,
+    "my_loan_deadlines",
+  );
+  assert.equal(
+    fallbackBorrowerIntent("Ano mga request ko?", equipment).intent,
+    "my_loans",
+  );
+  assert.equal(borrowerAnswerLanguage("What camera do I need?"), "english");
+});
+
 test("fallback classification recognizes item detail and personal loan questions", () => {
   for (const question of [
     "Tell me about the Sony Camera",
@@ -193,6 +231,39 @@ test("profile questions resolve only to supported fields on the signed-in user's
     assert.match(answer, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.deepEqual(items, []);
   }
+});
+
+test("profile answers follow the language of a Tagalog question", () => {
+  const classification = fallbackBorrowerIntent("Ano pangalan ko?", equipment);
+  const { answer } = buildBorrowerAssistantResponse({
+    intent: classification.intent,
+    profileField: classification.profileField,
+    personalProfile: { name: "Jamie Rivera" },
+    language: borrowerAnswerLanguage("Ano pangalan ko?"),
+  });
+
+  assert.equal(answer, "Ang pangalan mo na naka-save sa Lendy profile mo ay Jamie Rivera.");
+});
+
+test("Tagalog item and borrowing answers stay grounded and use Filipino wording", () => {
+  const locationQuestion = fallbackBorrowerIntent("Saan ang Sony Camera?", equipment);
+  assert.equal(locationQuestion.intent, "item_question");
+  const locationReply = buildBorrowerAssistantResponse({
+    intent: locationQuestion.intent,
+    category: locationQuestion.category,
+    itemQuery: locationQuestion.itemQuery,
+    equipment,
+    language: borrowerAnswerLanguage("Saan ang Sony Camera?"),
+  });
+  assert.match(locationReply.answer, /impormasyong naka-save sa Lendy/i);
+  assert.match(locationReply.answer, /AV Room/);
+  assert.deepEqual(locationReply.items.map((item) => item.id), ["camera-1"]);
+
+  const borrowingReply = buildBorrowerAssistantResponse({
+    intent: "how_to_borrow",
+    language: "filipino",
+  });
+  assert.match(borrowingReply.answer, /Pumunta sa Browse/);
 });
 
 test("gender questions do not infer sexual orientation from the profile", () => {

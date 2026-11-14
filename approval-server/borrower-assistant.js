@@ -2,6 +2,14 @@
 
 const activeLoanStatuses = new Set(["approved", "return_pending"]);
 
+function borrowerAnswerLanguage(question) {
+  return /\b(?:ano|anong|paano|pano|sino|alin|saan|kailan|kelan|ko|ako|akin|mo|mga|pwede|puwede|pwedeng|puwedeng|hiram|hiramin|hihiram|ibalik|kailangan|gusto|hanap|meron|yung|dapat|hindi|ba|pangalan|kasarian)\b/i.test(
+    question,
+  )
+    ? "filipino"
+    : "english";
+}
+
 function fallbackBorrowerIntent(question, equipment) {
   const normalized = question.toLowerCase();
   const profileField = borrowerProfileField(normalized);
@@ -22,11 +30,15 @@ function fallbackBorrowerIntent(question, equipment) {
     normalized.includes(normalizeCategory(category)),
   ) || "";
 
-  if (/\b(deadline|due date|return date|when .* due)\b/.test(normalized)) {
+  if (
+    /\b(deadline|due date|return date|when .* due)\b|\b(?:kailan|kelan)\b.{0,40}\b(?:due|deadline|ibalik\w*|ibabalik|return)\b/.test(
+      normalized,
+    )
+  ) {
     return { intent: "my_loan_deadlines", category: "", itemQuery: "" };
   }
   if (
-    /\b(?:my|mine|me|i)\b.{0,35}\b(?:loans?|requests?|borrowed|borrowing|checked out)\b|\bwhat (?:did|have) i borrow\b/.test(
+    /\b(?:my|mine|me|i)\b.{0,35}\b(?:loans?|requests?|borrowed|borrowing|checked out)\b|\bwhat (?:did|have) i borrow\b|\b(?:mga )?(?:loan|request) ko\b|\b(?:ano|anong) (?:mga )?(?:loan|request)s? ko\b|\bhiniram ko\b/.test(
       normalized,
     )
   ) {
@@ -34,26 +46,34 @@ function fallbackBorrowerIntent(question, equipment) {
   }
   const hasInventoryContext =
     Boolean(mentionedItem || mentionedCategory) ||
-    /\b(equipment|items?|inventory|stock|borrow|request|recommend|suggest|tools?|devices?)\b/.test(
+    /\b(equipment|items?|inventory|stock|borrow|request|recommend|suggest|tools?|devices?|hiram|hiramin|hihiram|gamit|kagamitan)\b/.test(
       normalized,
     ) ||
-    /\b(what|which)\b.{0,30}\bavailable\b|\bwhat can i borrow\b/.test(
+    /\b(what|which)\b.{0,30}\bavailable\b|\bwhat can i borrow\b|\b(?:ano|anong|alin)\b.{0,40}\b(?:available|pwedeng hiramin|puwedeng hiramin|hiramin)\b/.test(
       normalized,
     );
   if (!hasInventoryContext) {
     return { intent: "unknown", category: "", itemQuery: "" };
   }
-  if (/\b(how.*borrow|borrow.*item|how.*request)\b/.test(normalized)) {
+  if (
+    /\b(how.*borrow|borrow.*item|how.*request|paano.*(?:hiram|borrow|request)|mag-?borrow|mag-?request)\b/.test(
+      normalized,
+    )
+  ) {
     return { intent: "how_to_borrow", category: "", itemQuery: "" };
   }
-  if (/\b(status|condition|where is|is .* available)\b/.test(normalized)) {
+  if (/\b(status|condition|is .* available)\b/.test(normalized)) {
     return {
       intent: "item_status",
       category: mentionedCategory,
       itemQuery: mentionedItem?.name || "",
     };
   }
-  if (/\b(available|in stock|what can i borrow)\b/.test(normalized)) {
+  if (
+    /\b(available|in stock|what can i borrow|may .* available|ano .* available)\b|\b(?:pwede|puwede)\b.{0,25}\bhiramin\b/.test(
+      normalized,
+    )
+  ) {
     return {
       intent: "available_items",
       category: mentionedCategory,
@@ -61,9 +81,20 @@ function fallbackBorrowerIntent(question, equipment) {
     };
   }
   if (
+    /\b(suggest|recommend|what should i borrow|item for me|i need|looking for|want to borrow|kailangan ko|hanap ko|gusto kong hiramin|gusto ko manghiram|pwede ko bang hiramin|puwede ko bang hiramin)\b/.test(
+      normalized,
+    )
+  ) {
+    return {
+      intent: "suggest_item",
+      category: mentionedCategory,
+      itemQuery: mentionedItem?.name || "",
+    };
+  }
+  if (
     mentionedItem ||
     (mentionedCategory &&
-      /\b(?:tell me about|describe|explain|details?|information|features?|specs?|specifications?|what (?:is|are)|which)\b/.test(
+      /\b(?:tell me about|describe|explain|details?|information|features?|specs?|specifications?|what (?:is|are)|which|where|saan|nasaan)\b/.test(
         normalized,
       ))
   ) {
@@ -74,7 +105,7 @@ function fallbackBorrowerIntent(question, equipment) {
     };
   }
   if (
-    /\b(?:list|show|catalog|inventory|all items|items list)\b|\b(?:what|which)\s+(?:items?|equipment|tools?|devices?)\b/.test(
+    /\b(?:list|show|catalog|inventory|all items|items list)\b|\b(?:what|which)\s+(?:items?|equipment|tools?|devices?)\b|\b(?:ano|anong|alin|ipakita)\b.{0,40}\b(?:mga )?(?:item|gamit|kagamitan|camera|projector|laptop|tablet)s?\b/.test(
       normalized,
     )
   ) {
@@ -84,53 +115,58 @@ function fallbackBorrowerIntent(question, equipment) {
       itemQuery: mentionedItem?.name || "",
     };
   }
-  if (
-    /\b(suggest|recommend|what should i borrow|item for me|i need|looking for|want to borrow)\b/.test(
-      normalized,
-    )
-  ) {
-    return {
-      intent: "suggest_item",
-      category: mentionedCategory,
-      itemQuery: mentionedItem?.name || "",
-    };
-  }
   return { intent: "unknown", category: "", itemQuery: "" };
 }
 
 function borrowerProfileField(question) {
   const normalized = question.toLowerCase();
-  if (/\bmy\s+(?:full\s+)?name\b|\bwhat\s+is\s+my\s+name\b/.test(normalized)) {
+  if (
+    /\bmy\s+(?:full\s+)?name\b|\bwhat\s+is\s+my\s+name\b|\b(?:ano|anong)\s+(?:ang\s+)?pangalan\s+ko\b|\bpangalan ko\b/.test(
+      normalized,
+    )
+  ) {
     return "name";
   }
-  if (/\bmy\s+(?:email|email address)\b|\bwhat email (?:do i use|is on my account)\b/.test(normalized)) {
+  if (
+    /\bmy\s+(?:email|email address)\b|\bwhat email (?:do i use|is on my account)\b|\b(?:ano|anong)\s+(?:ang\s+)?email ko\b/.test(
+      normalized,
+    )
+  ) {
     return "email";
   }
-  if (/\bmy\s+role\b|\bam i (?:a )?(?:student|faculty)\b/.test(normalized)) {
+  if (
+    /\bmy\s+role\b|\bam i (?:a )?(?:student|faculty)\b|\b(?:ano|anong)\s+(?:ang\s+)?role ko\b|\bstudent ba ako\b|\bfaculty ba ako\b/.test(
+      normalized,
+    )
+  ) {
     return "role";
   }
-  if (/\bmy\s+(?:id|identification|student)\s+number\b/.test(normalized)) {
+  if (
+    /\bmy\s+(?:id|identification|student)\s+number\b|\b(?:ano|anong)\s+(?:ang\s+)?(?:id|student) number ko\b/.test(
+      normalized,
+    )
+  ) {
     return "idNumber";
   }
   if (
-    /\bmy\s+(?:college|course|program|major)\b|\bwhat (?:course|program|major|college) am i (?:taking|in|studying)\b/.test(
+    /\bmy\s+(?:college|course|program|major)\b|\bwhat (?:course|program|major|college) am i (?:taking|in|studying)\b|\b(?:ano|anong)\s+(?:ang\s+)?(?:college|course|program|major) ko\b/.test(
       normalized,
     )
   ) {
     return "college";
   }
-  if (/\bmy\s+year(?:\s+level)?\b/.test(normalized)) {
+  if (/\bmy\s+year(?:\s+level)?\b|\b(?:ano|anong)\s+(?:ang\s+)?year(?: level)? ko\b/.test(normalized)) {
     return "yearLevel";
   }
-  if (/\bmy\s+(?:block|section)\b/.test(normalized)) {
+  if (/\bmy\s+(?:block|section)\b|\b(?:ano|anong)\s+(?:ang\s+)?(?:block|section) ko\b/.test(normalized)) {
     return "block";
   }
   const asksAboutGender =
-    /\bmy\s+gender\b|\bwhat(?:'s| is)?\s+gender\s+(?:am i|i am|i'm)\b|\bwhat is my gender\b/.test(
+    /\bmy\s+gender\b|\bwhat(?:'s| is)?\s+gender\s+(?:am i|i am|i'm)\b|\bwhat is my gender\b|\b(?:ano|anong)\s+(?:ang\s+)?(?:gender|kasarian) ko\b/.test(
       normalized,
     );
   const asksAboutOrientation =
-    /\b(?:gay|lesbian|bisexual|straight|queer|asexual|pansexual|sexual orientation|sexuality)\b/.test(
+    /\b(?:gay|lesbian|bisexual|straight|queer|asexual|pansexual|sexual orientation|sexuality|bakla|tomboy)\b/.test(
       normalized,
     );
   if (asksAboutGender && asksAboutOrientation) {
@@ -141,14 +177,14 @@ function borrowerProfileField(question) {
   }
   if (
     asksAboutOrientation &&
-    /\b(?:am i|i am|i'm|my)\b.{0,30}\b(?:gay|lesbian|bisexual|straight|queer|asexual|pansexual|sexual orientation|sexuality)\b/.test(
+    /\b(?:am i|i am|i'm|my|ako)\b.{0,30}\b(?:gay|lesbian|bisexual|straight|queer|asexual|pansexual|sexual orientation|sexuality|bakla|tomboy)\b|\b(?:gay|lesbian|bisexual|straight|queer|asexual|pansexual|bakla|tomboy)\b.{0,20}\bako\b/.test(
       normalized,
     )
   ) {
     return "orientation";
   }
   if (
-    /\bwho am i\b|\bmy profile\b|\bmy account details\b|\bmy information\b|\bwhat do you know about me\b|\btell me about myself\b/.test(
+    /\bwho am i\b|\bmy profile\b|\bmy account details\b|\bmy information\b|\bwhat do you know about me\b|\btell me about myself\b|\bsino ako\b|\b(?:ano|anong) (?:mga )?(?:info|information|details) ko\b|\bprofile ko\b|\banong alam mo tungkol sa akin\b/.test(
       normalized,
     )
   ) {
@@ -207,7 +243,7 @@ function availableItems(equipment, activeLoans, category, itemQuery = "") {
     );
 }
 
-function itemStatus(item, activeLoans) {
+function itemStatus(item, activeLoans = []) {
   if (item.maintenance === true) return "In Maintenance";
   const loans = activeLoans.filter((loan) => loan.equipmentId === item.id);
   if (loans.some((loan) => loan.status === "return_pending")) {
@@ -217,23 +253,26 @@ function itemStatus(item, activeLoans) {
   return "Available";
 }
 
-function loanStatusLabel(loan) {
-  if (loan.status === "approved" && loan.checkedOutAt) return "Borrowed";
+function loanStatusLabel(loan, language = "english") {
+  const filipino = language === "filipino";
+  if (loan.status === "approved" && loan.checkedOutAt) {
+    return filipino ? "Nahiram" : "Borrowed";
+  }
   switch (loan.status) {
     case "pending":
-      return "Pending approval";
+      return filipino ? "Pending ng approval" : "Pending approval";
     case "approved":
-      return "Approved";
+      return filipino ? "Naaprubahan" : "Approved";
     case "return_pending":
-      return "Return awaiting verification";
+      return filipino ? "Naghihintay ng return verification" : "Return awaiting verification";
     case "returned":
-      return "Returned";
+      return filipino ? "Naibalik" : "Returned";
     case "rejected":
-      return "Rejected";
+      return filipino ? "Tinanggihan" : "Rejected";
     case "cancelled":
-      return "Cancelled";
+      return filipino ? "Kinansela" : "Cancelled";
     default:
-      return "Unknown status";
+      return filipino ? "Hindi alam ang status" : "Unknown status";
   }
 }
 
@@ -266,49 +305,81 @@ function formatDueDate(value) {
   }).format(date);
 }
 
-function buildBorrowerProfileAnswer(profileField, profile = {}) {
+function buildBorrowerProfileAnswer(
+  profileField,
+  profile = {},
+  language = "english",
+) {
+  const filipino = language === "filipino";
   if (profileField === "orientation") {
-    return "Your Lendy profile does not store sexual orientation, so I can't determine whether you are gay.";
+    return filipino
+      ? "Walang naka-save na sexual orientation sa Lendy profile mo, kaya hindi ko masasabi kung gay ka o hindi."
+      : "Your Lendy profile does not store sexual orientation, so I can't determine whether you are gay.";
   }
   if (profileField === "gender_orientation") {
     const gender = typeof profile.gender === "string" && profile.gender.trim()
-      ? `Your Lendy profile lists your gender as ${profile.gender.trim()}. `
-      : "Your Lendy profile does not list a gender. ";
-    return `${gender}Gender is different from sexual orientation, and your profile does not store sexual orientation, so I can't determine whether you are gay.`;
+      ? filipino
+        ? `Ayon sa Lendy profile mo, ${profile.gender.trim()} ang gender mo. `
+        : `Your Lendy profile lists your gender as ${profile.gender.trim()}. `
+      : filipino
+        ? "Walang nakasave na gender sa Lendy profile mo. "
+        : "Your Lendy profile does not list a gender. ";
+    return filipino
+      ? `${gender}Magkaiba ang gender at sexual orientation. Hindi naka-save sa profile mo ang sexual orientation kaya hindi ko masasabi kung bakla ka o hindi.`
+      : `${gender}Gender is different from sexual orientation, and your profile does not store sexual orientation, so I can't determine whether you are gay.`;
   }
 
   const fields = {
-    name: ["name", "name"],
-    email: ["email", "email address"],
+    name: ["name", filipino ? "pangalan" : "name"],
+    email: ["email", filipino ? "email" : "email address"],
     role: ["role", "role"],
     idNumber: ["idNumber", "ID number"],
-    college: ["college", "college or course"],
+    college: ["college", filipino ? "course/college" : "college or course"],
     yearLevel: ["yearLevel", "year level"],
     block: ["block", "block"],
     gender: ["gender", "gender"],
   };
   if (profileField === "summary") {
+    const labels = filipino
+      ? {
+          name: "Pangalan",
+          role: "Role",
+          college: "College/course",
+          yearLevel: "Year level",
+          block: "Block",
+        }
+      : {
+          name: "Name",
+          role: "Role",
+          college: "College/course",
+          yearLevel: "Year level",
+          block: "Block",
+        };
     const details = [
       typeof profile.name === "string" && profile.name.trim()
-        ? `Name: ${profile.name.trim()}`
+        ? `${labels.name}: ${profile.name.trim()}`
         : "",
       typeof profile.role === "string" && profile.role.trim()
-        ? `Role: ${profile.role.trim()}`
+        ? `${labels.role}: ${profile.role.trim()}`
         : "",
       typeof (profile.college || profile.course) === "string" &&
           (profile.college || profile.course).trim()
-        ? `College/course: ${(profile.college || profile.course).trim()}`
+        ? `${labels.college}: ${(profile.college || profile.course).trim()}`
         : "",
       typeof profile.yearLevel === "string" && profile.yearLevel.trim()
-        ? `Year level: ${profile.yearLevel.trim()}`
+        ? `${labels.yearLevel}: ${profile.yearLevel.trim()}`
         : "",
       typeof profile.block === "string" && profile.block.trim()
-        ? `Block: ${profile.block.trim()}`
+        ? `${labels.block}: ${profile.block.trim()}`
         : "",
     ].filter(Boolean);
     return details.length
-      ? `Here is the profile information on your account:\n${details.join("\n")}`
-      : "Your Lendy profile does not have those details saved yet.";
+      ? filipino
+        ? `Ito ang impormasyong naka-save sa Lendy profile mo:\n${details.join("\n")}`
+        : `Here is the profile information on your account:\n${details.join("\n")}`
+      : filipino
+        ? "Wala pang naka-save na impormasyon sa Lendy profile mo."
+        : "Your Lendy profile does not have those details saved yet.";
   }
 
   const field = fields[profileField];
@@ -318,12 +389,16 @@ function buildBorrowerProfileAnswer(profileField, profile = {}) {
   const [key, label] = field;
   const value = profile[key] || (key === "college" ? profile.course : "");
   if (typeof value !== "string" || !value.trim()) {
-    return `Your ${label} is not listed in your Lendy profile.`;
+    return filipino
+      ? `Walang naka-save na ${label} sa Lendy profile mo.`
+      : `Your ${label} is not listed in your Lendy profile.`;
   }
   const displayValue = key === "role"
     ? value.charAt(0).toUpperCase() + value.slice(1)
     : value.trim();
-  return `Your ${label} on your Lendy profile is ${displayValue}.`;
+  return filipino
+    ? `Ang ${label} mo na naka-save sa Lendy profile mo ay ${displayValue}.`
+    : `Your ${label} on your Lendy profile is ${displayValue}.`;
 }
 
 function buildItemQuestionAnswer({
@@ -331,12 +406,18 @@ function buildItemQuestionAnswer({
   itemQuery = "",
   equipment = [],
   activeLoans = [],
+  language = "english",
 }) {
+  const filipino = language === "filipino";
   const matches = matchingItems(equipment, category, itemQuery).slice(0, 5);
   if (matches.length === 0) {
     return itemQuery
-      ? `I couldn't find an item matching "${itemQuery}" in the Lendy inventory.`
-      : "I couldn't find a matching item in the Lendy inventory.";
+      ? filipino
+        ? `Walang item na tumutugma sa "${itemQuery}" sa Lendy inventory.`
+        : `I couldn't find an item matching "${itemQuery}" in the Lendy inventory.`
+      : filipino
+        ? "Walang nahanap na tumutugmang item sa Lendy inventory."
+        : "I couldn't find a matching item in the Lendy inventory.";
   }
   const details = matches.map((item) => {
     const facts = [
@@ -353,7 +434,9 @@ function buildItemQuestionAnswer({
     ].filter((value) => typeof value === "string" && value.trim());
     return `${item.name || "Unnamed item"} — ${facts.join("; ")}`;
   });
-  return `Here is the information recorded in Lendy:\n${details.join("\n")}\nI can only confirm details saved in the inventory.`;
+  return filipino
+    ? `Ito ang impormasyong naka-save sa Lendy:\n${details.join("\n")}\nAng makukumpirma ko lang ay ang impormasyong naka-save sa inventory.`
+    : `Here is the information recorded in Lendy:\n${details.join("\n")}\nI can only confirm details saved in the inventory.`;
 }
 
 function buildBorrowerAssistantAnswer({
@@ -366,13 +449,17 @@ function buildBorrowerAssistantAnswer({
   profileField = "",
   personalProfile = {},
   answer = "",
+  language = "english",
 }) {
+  const filipino = language === "filipino";
   if (intent === "my_profile") {
-    return buildBorrowerProfileAnswer(profileField, personalProfile);
+    return buildBorrowerProfileAnswer(profileField, personalProfile, language);
   }
 
   if (intent === "how_to_borrow") {
-    return "Open Browse, choose an available item, and tap Request. Select your borrow and return dates, then submit the request. You can track its approval in Loans. After approval, check out the item and report its return when you are done.";
+    return filipino
+      ? "Pumunta sa Browse, pumili ng available na item, at i-tap ang Request. Piliin ang hiram at return dates, pagkatapos ay isumite ang request. Makikita mo ang approval status sa Loans."
+      : "Open Browse, choose an available item, and tap Request. Select your borrow and return dates, then submit the request. You can track its approval in Loans. After approval, check out the item and report its return when you are done.";
   }
 
   if (intent === "my_loan_deadlines") {
@@ -380,12 +467,16 @@ function buildBorrowerAssistantAnswer({
       .filter((loan) => activeLoanStatuses.has(loan.status))
       .sort((a, b) => String(a.end || "").localeCompare(String(b.end || "")));
     if (loans.length === 0) {
-      return "You have no active loans with a return deadline right now.";
+      return filipino
+        ? "Wala kang active loan na may return deadline sa ngayon."
+        : "You have no active loans with a return deadline right now.";
     }
-    return `Your active loan deadlines:\n${loans
+    return `${filipino ? "Mga return deadline ng active loans mo:" : "Your active loan deadlines:"}\n${loans
       .map(
         (loan) =>
-          `${loan.name || "Unnamed item"} — due ${formatDueDate(loan.end)}`,
+          filipino
+            ? `${loan.name || "Unnamed item"} — ibalik sa ${formatDueDate(loan.end)}`
+            : `${loan.name || "Unnamed item"} — due ${formatDueDate(loan.end)}`,
       )
       .join("\n")}`;
   }
@@ -395,14 +486,24 @@ function buildBorrowerAssistantAnswer({
       .sort((a, b) => String(b.start || "").localeCompare(String(a.start || "")))
       .slice(0, 20);
     if (loans.length === 0) {
-      return "I couldn't find any loan or request records for your account.";
+      return filipino
+        ? "Walang nahanap na loan o request record para sa account mo."
+        : "I couldn't find any loan or request records for your account.";
     }
-    return `Your Lendy loan/request records:\n${loans
+    return `${filipino ? "Mga loan/request record mo sa Lendy:" : "Your Lendy loan/request records:"}\n${loans
       .map((loan) => {
-        const dueDate = loan.end ? ` — return date ${formatDueDate(loan.end)}` : "";
-        return `${loan.name || "Unnamed item"} — ${loanStatusLabel(loan)}${dueDate}`;
+        const dueDate = loan.end
+          ? filipino
+            ? ` — ibalik sa ${formatDueDate(loan.end)}`
+            : ` — return date ${formatDueDate(loan.end)}`
+          : "";
+        return `${loan.name || "Unnamed item"} — ${loanStatusLabel(loan, language)}${dueDate}`;
       })
-      .join("\n")}${personalLoans.length > loans.length ? "\nShowing the 20 most recent records." : ""}`;
+      .join("\n")}${personalLoans.length > loans.length
+        ? filipino
+          ? "\nIpinapakita ang 20 pinakabagong record."
+          : "\nShowing the 20 most recent records."
+        : ""}`;
   }
 
   if (intent === "item_question") {
@@ -411,6 +512,7 @@ function buildBorrowerAssistantAnswer({
       itemQuery,
       equipment,
       activeLoans,
+      language,
     });
   }
 
@@ -418,39 +520,63 @@ function buildBorrowerAssistantAnswer({
     const matches = matchingItems(equipment, category, itemQuery);
     if (matches.length === 0) {
       return itemQuery
-        ? `I couldn't find an inventory item matching "${itemQuery}". Check the item name or code and try again.`
-        : "There are no items in the equipment inventory right now.";
+        ? filipino
+          ? `Walang item na tumutugma sa "${itemQuery}". Tingnan ang pangalan o code at subukan ulit.`
+          : `I couldn't find an inventory item matching "${itemQuery}". Check the item name or code and try again.`
+        : filipino
+          ? "Walang item sa equipment inventory sa ngayon."
+          : "There are no items in the equipment inventory right now.";
     }
     if (intent === "item_status" && matches.length === 1) {
-      return `${matches[0].name || "This item"} is currently ${itemStatus(matches[0], activeLoans)}.`;
+      return filipino
+        ? `${matches[0].name || "Ang item na ito"} ay kasalukuyang ${itemStatus(matches[0], activeLoans)}.`
+        : `${matches[0].name || "This item"} is currently ${itemStatus(matches[0], activeLoans)}.`;
     }
     const shown = Math.min(matches.length, 20);
-    return `Here are ${shown} inventory item(s) and their current status.${matches.length > shown ? " Showing the first 20 matches." : ""}`;
+    return filipino
+      ? `Narito ang ${shown} item sa inventory at ang kasalukuyang status ng mga ito.${matches.length > shown ? " Ipinapakita ang unang 20 tugma." : ""}`
+      : `Here are ${shown} inventory item(s) and their current status.${matches.length > shown ? " Showing the first 20 matches." : ""}`;
   }
 
   if (intent === "available_items" || intent === "suggest_item") {
     const matches = availableItems(equipment, activeLoans, category, itemQuery);
     if (intent === "available_items") {
       const description = category
-        ? ` matching "${category}"`
+        ? filipino
+          ? ` sa kategoryang "${category}"`
+          : ` matching "${category}"`
         : itemQuery
-          ? ` matching "${itemQuery}"`
+          ? filipino
+            ? ` na tumutugma sa "${itemQuery}"`
+            : ` matching "${itemQuery}"`
           : "";
       if (matches.length === 0) {
-        return `There are no available items${description} right now.`;
+        return filipino
+          ? `Walang available na item${description} sa ngayon.`
+          : `There are no available items${description} right now.`;
       }
-      return `${matches.length} item(s) available${description}. Choose one below to request it.`;
+      return filipino
+        ? `${matches.length} item ang available${description}. Pumili sa ibaba para mag-request.`
+        : `${matches.length} item(s) available${description}. Choose one below to request it.`;
     }
 
     if (matches.length === 0) {
       return category
-        ? `There are no available items matching "${category}" right now. Try asking what items are available.`
-        : "There are no available items to suggest right now.";
+        ? filipino
+          ? `Walang available na item sa "${category}" sa ngayon.`
+          : `There are no available items matching "${category}" right now. Try asking what items are available.`
+        : filipino
+          ? "Walang available na item na maimumungkahi sa ngayon."
+          : "There are no available items to suggest right now.";
     }
-    return "Here are some available matches. Tap Request on an item to choose your dates.";
+    return filipino
+      ? "Narito ang ilang available na item. I-tap ang Request para pumili ng mga petsa."
+      : "Here are some available matches. Tap Request on an item to choose your dates.";
   }
 
-  return "I can help with Lendy's equipment, your profile, and your own loan/request records. I can only confirm information saved in Lendy, so I won't guess when a detail isn't available.";
+  return filipino
+    ? "Makakatulong ako sa mga item at equipment ng Lendy, profile mo, at sarili mong loan/request records. Impormasyong naka-save lang sa Lendy ang makukumpirma ko, kaya hindi ako manghuhula kapag walang detalye."
+    : "I can help with Lendy's equipment, your profile, and your own loan/request records. I can only confirm information saved in Lendy, so I won't guess when a detail isn't available.";
 }
 
 function buildBorrowerAssistantResponse(input) {
@@ -488,6 +614,7 @@ function buildBorrowerAssistantResponse(input) {
 
 module.exports = {
   buildBorrowerAssistantResponse,
+  borrowerAnswerLanguage,
   borrowerProfileField,
   findInventoryCategory,
   fallbackBorrowerIntent,
