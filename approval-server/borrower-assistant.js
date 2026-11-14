@@ -18,16 +18,33 @@ function fallbackBorrowerIntent(question, equipment) {
     normalized.includes(normalizeCategory(category)),
   ) || "";
 
-  if (
-    /\b(deadline|due date|return date|when.*return|my loans|my borrowings)\b/.test(
-      normalized,
-    )
-  ) {
+  if (/\b(deadline|due date|return date|my loans|my borrowings)\b/.test(normalized)) {
     return { intent: "my_loan_deadlines", category: "", itemQuery: "" };
+  }
+  const hasInventoryContext =
+    Boolean(mentionedItem || mentionedCategory) ||
+    /\b(equipment|items?|inventory|stock|borrow|request|recommend|suggest|tools?|devices?)\b/.test(
+      normalized,
+    ) ||
+    /\b(what|which)\b.{0,30}\bavailable\b|\bwhat can i borrow\b/.test(
+      normalized,
+    );
+  if (!hasInventoryContext) {
+    return { intent: "unknown", category: "", itemQuery: "" };
+  }
+  if (/\b(how.*borrow|borrow.*item|how.*request)\b/.test(normalized)) {
+    return { intent: "how_to_borrow", category: "", itemQuery: "" };
   }
   if (/\b(status|condition|where is|is .* available)\b/.test(normalized)) {
     return {
       intent: "item_status",
+      category: mentionedCategory,
+      itemQuery: mentionedItem?.name || "",
+    };
+  }
+  if (/\b(available|in stock|what can i borrow)\b/.test(normalized)) {
+    return {
+      intent: "available_items",
       category: mentionedCategory,
       itemQuery: mentionedItem?.name || "",
     };
@@ -38,9 +55,7 @@ function fallbackBorrowerIntent(question, equipment) {
     )
   ) {
     return {
-      intent: /\b(available|in stock|can i borrow)\b/.test(normalized)
-        ? "available_items"
-        : "inventory_list",
+      intent: "inventory_list",
       category: mentionedCategory,
       itemQuery: mentionedItem?.name || "",
     };
@@ -55,16 +70,6 @@ function fallbackBorrowerIntent(question, equipment) {
       category: mentionedCategory,
       itemQuery: mentionedItem?.name || "",
     };
-  }
-  if (/\b(available|in stock|what can i borrow)\b/.test(normalized)) {
-    return {
-      intent: "available_items",
-      category: mentionedCategory,
-      itemQuery: mentionedItem?.name || "",
-    };
-  }
-  if (/\b(how.*borrow|borrow.*item|how.*request)\b/.test(normalized)) {
-    return { intent: "how_to_borrow", category: "", itemQuery: "" };
   }
   return { intent: "unknown", category: "", itemQuery: "" };
 }
@@ -82,6 +87,10 @@ function findInventoryCategory(candidate, equipment) {
       .map((item) => item.category)
       .filter((category) => typeof category === "string" && category.trim()),
   )].find((category) => normalizeCategory(category) === normalized) || "";
+}
+
+function isBorrowerDomainQuestion(question, equipment) {
+  return fallbackBorrowerIntent(question, equipment).intent !== "unknown";
 }
 
 function categoryMatches(item, category) {
@@ -252,4 +261,5 @@ module.exports = {
   buildBorrowerAssistantResponse,
   findInventoryCategory,
   fallbackBorrowerIntent,
+  isBorrowerDomainQuestion,
 };

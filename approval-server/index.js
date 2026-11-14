@@ -5,6 +5,7 @@ const {
   buildBorrowerAssistantResponse,
   findInventoryCategory,
   fallbackBorrowerIntent,
+  isBorrowerDomainQuestion,
 } = require("./borrower-assistant");
 const { isAllowedApiRequest } = require("./request-origin");
 const { createHash, randomBytes, timingSafeEqual } = require("node:crypto");
@@ -1108,6 +1109,7 @@ function sanitizeBorrowerQuestion(question) {
 
 async function classifyBorrowerQuestion(question, equipment) {
   const fallback = fallbackBorrowerIntent(question, equipment);
+  if (!isBorrowerDomainQuestion(question, equipment)) return fallback;
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return fallback;
 
@@ -1135,6 +1137,9 @@ async function classifyBorrowerQuestion(question, equipment) {
             "Classify the signed-in borrower's question and return only JSON.",
             `Allowed intents: ${[...borrowerAssistantIntents].join(", ")}.`,
             `Inventory categories from the backend: ${categories.join(", ") || "none"}.`,
+            "Read and analyze the entire question before choosing an intent; do not classify based only on the first word.",
+            "A generic question such as 'What is my name?' or 'Who are you?' is not an inventory question. Choose unknown; never return inventory results for personal or unrelated questions.",
+            "Only use inventory intents when the question is actually about equipment, items, tools/devices, stock, availability, a known category/item, or a request/recommendation for something to borrow.",
             "Choose my_loan_deadlines only for the signed-in user's own active loan deadlines.",
             "Choose suggest_item whenever the user needs, wants, or is looking for equipment, including a use case. Infer a category only if it matches one of the backend categories above (for example, recording video can match a Camera category).",
             "Choose available_items for availability, inventory_list when the user asks what equipment exists, and item_status when they ask about one item's status or condition.",

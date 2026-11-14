@@ -7,6 +7,7 @@ const {
   buildBorrowerAssistantResponse,
   findInventoryCategory,
   fallbackBorrowerIntent,
+  isBorrowerDomainQuestion,
 } = require("./borrower-assistant");
 
 const equipment = [
@@ -125,6 +126,16 @@ test("fallback classification refuses general questions rather than inventing an
     fallbackBorrowerIntent("Who won the game?", equipment).intent,
     "unknown",
   );
+  assert.equal(
+    fallbackBorrowerIntent("What is my name?", equipment).intent,
+    "unknown",
+  );
+  assert.equal(
+    fallbackBorrowerIntent("I am available tomorrow", equipment).intent,
+    "unknown",
+  );
+  assert.equal(isBorrowerDomainQuestion("What is my name?", equipment), false);
+  assert.equal(isBorrowerDomainQuestion("What tool can I borrow?", equipment), true);
 });
 
 test("loan deadlines use only the supplied personal loans that are still active", () => {
