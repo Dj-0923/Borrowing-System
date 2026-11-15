@@ -106,6 +106,63 @@ test("item status answers are filtered to the item named by the borrower", () =>
   ]);
 });
 
+test("Tagalog maintenance questions return only inventory items in maintenance", () => {
+  const classification = fallbackBorrowerIntent(
+    "ano ang mga maintenance na item?",
+    equipment,
+  );
+  assert.equal(classification.intent, "maintenance_items");
+
+  const { answer, items } = buildBorrowerAssistantResponse({
+    ...classification,
+    equipment,
+    activeLoans: [{ equipmentId: "tablet-1", status: "approved" }],
+    language: "filipino",
+  });
+
+  assert.equal(answer, "May 1 item na nasa maintenance sa ngayon.");
+  assert.deepEqual(items.map((item) => [item.id, item.status]), [
+    ["tablet-1", "In Maintenance"],
+  ]);
+});
+
+test("English maintenance item questions return only matching status and report none", () => {
+  const classification = fallbackBorrowerIntent("maintenance items?", equipment);
+  assert.equal(classification.intent, "maintenance_items");
+
+  const { answer, items } = buildBorrowerAssistantResponse({
+    ...classification,
+    equipment,
+  });
+  assert.equal(answer, "1 item(s) are currently in maintenance.");
+  assert.deepEqual(items.map((item) => [item.name, item.status]), [
+    ["Tablet", "In Maintenance"],
+  ]);
+
+  const emptyResponse = buildBorrowerAssistantResponse({
+    ...classification,
+    equipment: equipment.filter((item) => !item.maintenance),
+  });
+  assert.equal(emptyResponse.answer, "There are no items in maintenance right now.");
+  assert.deepEqual(emptyResponse.items, []);
+});
+
+test("named maintenance status questions return only the named item", () => {
+  const classification = fallbackBorrowerIntent(
+    "Is the Tablet under maintenance?",
+    equipment,
+  );
+  assert.equal(classification.intent, "item_status");
+  assert.equal(classification.itemQuery, "Tablet");
+
+  const { answer, items } = buildBorrowerAssistantResponse({
+    ...classification,
+    equipment,
+  });
+  assert.equal(answer, "Tablet is currently In Maintenance.");
+  assert.deepEqual(items.map((item) => item.id), ["tablet-1"]);
+});
+
 test("fallback classification extracts an inventory-backed item category", () => {
   const result = fallbackBorrowerIntent(
     "I need a camera for recording",

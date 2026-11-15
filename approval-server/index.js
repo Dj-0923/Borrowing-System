@@ -1093,6 +1093,7 @@ const borrowerAssistantIntents = new Set([
   "suggest_item",
   "available_items",
   "inventory_list",
+  "maintenance_items",
   "item_status",
   "item_question",
   "my_loan_deadlines",
@@ -1164,7 +1165,12 @@ function borrowerCatalogFacts(equipment, activeLoans) {
 
 async function classifyBorrowerQuestion(question, equipment, activeLoans) {
   const fallback = fallbackBorrowerIntent(question, equipment);
-  if (fallback.intent === "my_profile") return fallback;
+  if (
+    fallback.intent === "my_profile" ||
+    fallback.intent === "maintenance_items"
+  ) {
+    return fallback;
+  }
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return fallback;
 
@@ -1199,6 +1205,7 @@ async function classifyBorrowerQuestion(question, equipment, activeLoans) {
             "Use my_profile for questions about the signed-in user's own saved profile and set profileField to the exact field being asked about. Never use or reveal another account.",
             "Use my_loans for questions about the signed-in user's own requests, borrowing history, current loans, or their statuses. Use my_loan_deadlines when specifically asking for due dates. Never infer from or disclose other borrowers' loans.",
             "Use suggest_item for a need or use case, available_items for availability, inventory_list for a list/catalog, item_status for a specific status, and item_question for other questions about the details or properties of Lendy items.",
+            "For requests asking which items are in maintenance or under repair, use maintenance_items so the response includes only items whose verified status is In Maintenance. For a named item, use item_status.",
             "For item_question, answer only from the supplied inventory facts. If the requested detail is not recorded, say so plainly instead of guessing. Include itemIds only for real matching inventory items; include only currently available items when recommending something to request.",
             "Use how_to_borrow for borrowing instructions. Use unknown for questions that cannot be answered from Lendy's inventory, the signed-in user's own profile/loans, or borrowing steps.",
             "Set category only to an exact value from the backend categories above; otherwise use an empty string. Set itemQuery to a short exact item name, tag, or ID mentioned by the user, or an empty string.",
@@ -1438,6 +1445,7 @@ async function answerBorrowerAssistant(data, borrowerUid) {
     classification.intent === "available_items" ||
     classification.intent === "suggest_item" ||
     classification.intent === "inventory_list" ||
+    classification.intent === "maintenance_items" ||
     classification.intent === "item_status"
   ) {
     return {

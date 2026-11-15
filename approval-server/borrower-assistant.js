@@ -44,6 +44,23 @@ function fallbackBorrowerIntent(question, equipment) {
   ) {
     return { intent: "my_loans", category: "", itemQuery: "" };
   }
+  const asksAboutMaintenance =
+    /\b(?:maintenance|under repair|being repaired|for repair)\b/.test(
+      normalized,
+    );
+  if (asksAboutMaintenance) {
+    return mentionedItem
+      ? {
+          intent: "item_status",
+          category: mentionedCategory,
+          itemQuery: mentionedItem.name,
+        }
+      : {
+          intent: "maintenance_items",
+          category: mentionedCategory,
+          itemQuery: "",
+        };
+  }
   const hasInventoryContext =
     Boolean(mentionedItem || mentionedCategory) ||
     /\b(equipment|items?|inventory|stock|borrow|request|recommend|suggest|tools?|devices?|hiram|hiramin|hihiram|gamit|kagamitan)\b/.test(
@@ -592,6 +609,21 @@ function buildBorrowerAssistantAnswer({
     });
   }
 
+  if (intent === "maintenance_items") {
+    const matches = equipment.filter(
+      (item) =>
+        itemStatus(item, activeLoans) === "In Maintenance" &&
+        categoryMatches(item, category),
+    );
+    return filipino
+      ? matches.length
+        ? `May ${matches.length} item na nasa maintenance sa ngayon.`
+        : "Walang item na nasa maintenance sa ngayon."
+      : matches.length
+        ? `${matches.length} item(s) are currently in maintenance.`
+        : "There are no items in maintenance right now.";
+  }
+
   if (intent === "inventory_list" || intent === "item_status") {
     const matches = matchingItems(equipment, category, itemQuery);
     if (matches.length === 0) {
@@ -668,7 +700,13 @@ function buildBorrowerAssistantResponse(input) {
           .slice(0, input.intent === "suggest_item" ? 5 : 20)
       : [];
   const itemResults =
-    input.intent === "inventory_list" || input.intent === "item_status"
+    input.intent === "maintenance_items"
+      ? matchingItems(input.equipment, input.category, input.itemQuery)
+          .filter(
+            (item) => itemStatus(item, input.activeLoans) === "In Maintenance",
+          )
+          .slice(0, 20)
+      : input.intent === "inventory_list" || input.intent === "item_status"
       ? matchingItems(input.equipment, input.category, input.itemQuery)
           .slice(0, 20)
       : input.intent === "item_question" && Array.isArray(input.itemIds)
