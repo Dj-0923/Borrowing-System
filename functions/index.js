@@ -1,7 +1,7 @@
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { getMessaging } = require('firebase-admin/messaging');
-const { onDocumentUpdated } = require('firebase-functions/v2/firestore');
+const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 
 initializeApp();
@@ -54,7 +54,7 @@ async function notifyBorrower({
   const notificationRef = accountRef.collection('notifications').doc(notificationId);
   const created = await db.runTransaction(async (transaction) => {
     const existing = await transaction.get(notificationRef);
-    if (existing.exists) return false;
+    if (existing.exists) return existing.data().pushSent !== true;
     transaction.create(notificationRef, {
       id: notificationId,
       loanId,
@@ -62,6 +62,7 @@ async function notifyBorrower({
       title,
       message,
       isRead: false,
+      pushSent: false,
       timestamp: FieldValue.serverTimestamp(),
     });
     return true;
@@ -106,6 +107,24 @@ async function notifyBorrower({
   await notificationRef.update({ pushSent });
 }
 
+exports.notifyAdminChatReply = onDocumentCreated(
+  { document: 'chats/{userId}/messages/{messageId}', region },
+  async (event) => {
+    const message = event.data?.data();
+    if (!message || message.senderRole !== 'admin') return;
+
+    await notifyBorrower({
+      borrowerUid: event.params.userId,
+      notificationId: `chat_${event.params.messageId}`,
+      title: 'New admin reply',
+      message: String(message.text || 'An admin replied to your chat.').slice(0, 300),
+      type: 'admin_chat_reply',
+      loanId: '',
+      preferenceKey: 'pushNotificationsEnabled',
+    });
+  },
+);
+
 exports.notifyLoanStatus = onDocumentUpdated(
   { document: 'loans/{loanId}', region },
   async (event) => {
@@ -113,13 +132,35 @@ exports.notifyLoanStatus = onDocumentUpdated(
     const after = event.data?.after.data();
     if (!before || !after) return;
 
-    if (before.status === 'approved' && after.status === 'returned') {
+    if (
+      ['approved', 'return_pending'].includes(before.status) &&
+      after.status === 'returned'
+    ) {
       await notifyBorrower({
         borrowerUid: after.borrowerUid,
         notificationId: `${event.params.loanId}_returned`,
         title: 'Item return confirmed',
         message: `${itemTitle(after)} has been marked as returned. Thank you.`,
         type: 'returned',
+        loanId: event.params.loanId,
+        preferenceKey: 'returnRemindersEnabled',
+      });
+      return;
+    }
+
+    if (
+      before.status === 'return_pending' &&
+      after.status === 'approved' &&
+      after.returnVerificationStatus === 'rejected'
+    ) {
+      await notifyBorrower({
+        borrowerUid: after.borrowerUid,
+        notificationId: `${event.params.loanId}_return_rejected_${after.returnVerifiedAt || event.time}`,
+        title: 'Return needs attention',
+        message: after.returnRejectionReason
+          ? `${itemTitle(after)} return was not approved: ${after.returnRejectionReason}`
+          : `${itemTitle(after)} return was not approved. Please review and resubmit.`,
+        type: 'return_rejected',
         loanId: event.params.loanId,
         preferenceKey: 'returnRemindersEnabled',
       });
@@ -150,7 +191,7 @@ exports.notifyLoanStatus = onDocumentUpdated(
 
 exports.sendLoanReminders = onSchedule(
   {
-    schedule: '0 9 * * *',
+    schedule: '0 0 * * *',
     timeZone: 'Asia/Manila',
     region,
   },
@@ -172,10 +213,20 @@ exports.sendLoanReminders = onSchedule(
         if (loan.end === tomorrow) {
           await notifyBorrower({
             borrowerUid: loan.borrowerUid,
-            notificationId: `${document.id}_due_${tomorrow}`,
+            notificationId: `${document.id}_due_tomorrow_${tomorrow}`,
             title: 'Return due tomorrow',
             message: `${itemTitle(loan)} is due tomorrow. Please return it on time.`,
             type: 'due_reminder',
+            loanId: document.id,
+            preferenceKey: 'returnRemindersEnabled',
+          });
+        } else if (loan.end === today) {
+          await notifyBorrower({
+            borrowerUid: loan.borrowerUid,
+            notificationId: `${document.id}_due_today_${today}`,
+            title: 'Return due today',
+            message: `${itemTitle(loan)} is due today. Please return it on time.`,
+            type: 'due_today',
             loanId: document.id,
             preferenceKey: 'returnRemindersEnabled',
           });

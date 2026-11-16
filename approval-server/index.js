@@ -1,6 +1,7 @@
 const { initializeApp, cert } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getMessaging } = require("firebase-admin/messaging");
 const {
   buildBorrowerAssistantResponse,
   borrowerAnswerLanguage,
@@ -386,6 +387,7 @@ async function createAccountRequest(data) {
   const gender = data && data.gender;
   const yearLevel = data && data.yearLevel;
   const block = data && data.block;
+  const notificationToken = data && data.notificationToken;
 
   if (!isValidEmail(email)) {
     throw new HttpError(400, "Enter a valid email address.", "invalid-email");
@@ -405,6 +407,14 @@ async function createAccountRequest(data) {
       !["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"].includes(block))
   ) {
     throw new HttpError(400, "Choose a valid year level and block.", "invalid-details");
+  }
+  if (
+    notificationToken != null &&
+    (typeof notificationToken !== "string" ||
+      notificationToken.length === 0 ||
+      notificationToken.length > 4096)
+  ) {
+    throw new HttpError(400, "The notification registration is invalid.");
   }
 
   const accounts = db.collection("accounts");
@@ -485,6 +495,12 @@ async function createAccountRequest(data) {
         );
       }
       transaction.create(requestRef, requestData);
+      if (notificationToken) {
+        transaction.create(
+          requestRef.collection("privateCredentials").doc("push-device"),
+          { token: notificationToken },
+        );
+      }
       transaction.create(lockRef, { requestId, email, createdAt: now });
     });
   } catch (error) {
@@ -493,6 +509,88 @@ async function createAccountRequest(data) {
     throw new HttpError(500, "Could not submit the account request.");
   }
   return { success: true, requestId, statusToken };
+}
+
+async function sendAccountRequestPush(requestRef, title, body) {
+  const deviceRef = requestRef
+    .collection("privateCredentials")
+    .doc("push-device");
+  const device = await deviceRef.get();
+  const token = device.data()?.token;
+  if (!device.exists || typeof token !== "string" || !token) return;
+
+  try {
+    await getMessaging().send({
+      token,
+      notification: { title, body },
+      android: {
+        priority: "high",
+        notification: { channelId: "lendy_alerts" },
+      },
+    });
+  } catch (error) {
+    if (
+      ["messaging/invalid-registration-token", "messaging/registration-token-not-registered"]
+        .includes(error.code)
+    ) {
+      await deviceRef.delete();
+    }
+    throw error;
+  }
+}
+
+async function sendFabiiReplyNotification(borrowerUid) {
+  const accountRef = db.collection("accounts").doc(borrowerUid);
+  const accountSnapshot = await accountRef.get();
+  if (!accountSnapshot.exists) return;
+  const preferences = accountSnapshot.data().notificationPreferences || {};
+  if (preferences.pushNotificationsEnabled === false) return;
+
+  const notificationId = `assistant_${randomBytes(12).toString("hex")}`;
+  const notificationRef = accountRef.collection("notifications").doc(notificationId);
+  const title = "Fabii replied";
+  const message = "Fabii has replied to your chat.";
+  await notificationRef.create({
+    id: notificationId,
+    type: "assistant_reply",
+    title,
+    message,
+    isRead: false,
+    timestamp: FieldValue.serverTimestamp(),
+  });
+
+  const deviceSnapshots = await accountRef.collection("devices").get();
+  const devices = deviceSnapshots.docs
+    .map((document) => ({ ref: document.ref, token: document.data().token }))
+    .filter((device) => typeof device.token === "string" && device.token);
+  let pushSent = false;
+  for (let offset = 0; offset < devices.length; offset += 500) {
+    const batch = devices.slice(offset, offset + 500);
+    const response = await getMessaging().sendEachForMulticast({
+      tokens: batch.map((device) => device.token),
+      notification: { title, body: message },
+      android: {
+        priority: "high",
+        notification: { channelId: "lendy_alerts" },
+      },
+    });
+    pushSent = pushSent || response.successCount > 0;
+    await Promise.all(
+      response.responses.map((result, index) => {
+        if (
+          result.success ||
+          ![
+            "messaging/invalid-registration-token",
+            "messaging/registration-token-not-registered",
+          ].includes(result.error?.code)
+        ) {
+          return Promise.resolve();
+        }
+        return batch[index].ref.delete();
+      }),
+    );
+  }
+  await notificationRef.update({ pushSent });
 }
 
 async function getAccountRequestStatus(data) {
@@ -818,6 +916,27 @@ async function approveRequest(data) {
       "The account was approved and its temporary password was emailed, but the request email lock could not be cleared.",
     );
   }
+  try {
+    await sendAccountRequestPush(
+      requestRef,
+      "Account approved",
+      "Your Lendy account request was approved. Sign in with the temporary password sent to your email.",
+    );
+  } catch (error) {
+    console.error("Could not send the account approval push notification.", {
+      requestId,
+      error: error.message,
+    });
+  } finally {
+    try {
+      await requestRef.collection("privateCredentials").doc("push-device").delete();
+    } catch (error) {
+      console.error("Could not remove the account-request device token.", {
+        requestId,
+        error: error.message,
+      });
+    }
+  }
   return { success: true, emailSent: true };
 }
 
@@ -890,6 +1009,18 @@ async function rejectAccountRequest(data) {
     }
   }
 
+  try {
+    await sendAccountRequestPush(
+      requestRef,
+      "Account request not approved",
+      "Your Lendy account request was not approved.",
+    );
+  } catch (error) {
+    console.error("Could not send the account rejection push notification.", {
+      requestId,
+      error: error.message,
+    });
+  }
   await deleteRequestCredentials(requestRef);
   await requestRef.delete();
   await releaseRequestEmailLock(normalizedEmail(request.email), requestId);
@@ -2006,10 +2137,19 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.url === "/borrower-assistant") {
       const borrowerUid = await requireBorrower(request);
+      const assistantResponse = await answerBorrowerAssistant(data, borrowerUid);
+      try {
+        await sendFabiiReplyNotification(borrowerUid);
+      } catch (error) {
+        console.error("Could not send Fabii's reply push notification.", {
+          borrowerUid,
+          error: error.message,
+        });
+      }
       sendJson(
         response,
         200,
-        await answerBorrowerAssistant(data, borrowerUid),
+        assistantResponse,
         origin,
       );
       return;

@@ -196,9 +196,10 @@ deletion, including linked loan and account-request records.
 ## Enable mobile notifications
 
 The mobile app registers its FCM device token in Firestore. The functions in
-`functions/` send approval, rejection, and return-status push notifications,
-and send daily due/overdue reminders. Deploying these functions is required for
-those server-generated alerts to arrive while the app is closed:
+`functions/` send admin-chat replies, item request and return decisions, and
+return deadline reminders. The account approval service also sends account
+request decisions and Fabii replies. Deploying these functions is required for
+server-generated alerts to arrive while the app is closed:
 
 1. Enable billing for the Firebase project (the Blaze plan is required for
    Cloud Functions and the scheduled reminder job). Review Firebase pricing
@@ -211,17 +212,22 @@ those server-generated alerts to arrive while the app is closed:
    cd ..
    firebase deploy --only functions --project borrowing-system-lendy
    ```
-3. Allow notifications for Lendy in the device's system settings. Sign in and
-   open the app with internet access so it can register the device token and
-   sync loan data.
+3. Deploy the latest `approval-server/` changes to the existing Render service.
+   That service sends the account-request and Fabii reply notifications.
+4. Allow notifications for Lendy when prompted and in the device's system
+   settings. Submit an account request or sign in with an approved account
+   while online so the app can register the device token.
+5. The scheduled job runs at 12:00 AM Asia/Manila for the due-date alert and
+   sends the one-day-before reminder at the same time the day before. Cloud
+   Scheduler delivery may be delayed slightly by the platform. FCM requires
+   internet access; a device that is offline can receive a push after it
+   reconnects. Android's system force-stop prevents delivery until the app is
+   opened again.
 
-The app also schedules local return-date reminders on the device. Once a loan
-has synced and its reminder is scheduled, that reminder does not need internet
-or the app to be running. A server-side change (such as an admin approving a
-request) cannot be known by an offline device at the time it happens. FCM may
-deliver that push after the device reconnects, but it cannot show immediately
-while offline. Android may also defer alarms for an app that has been force
-stopped; open the app again to resume them.
+Push alerts are not rendered by the app while it is in the foreground. While
+the app is closed or in the background, Android/iOS displays the FCM
+notification. Account-request decisions can be pushed before sign-in because
+the request flow stores the device token in the request's private credentials.
 
 ## What users and admins will see
 

@@ -1038,8 +1038,7 @@
         '<div class="border-b border-line px-5 py-4 flex items-center gap-3">' +
         userAvatar(selected, 'w-10 h-10', 'text-sm') +
         '<div class="min-w-0"><p class="font-semibold truncate">' + esc(selected.name || 'User') + '</p>' +
-        '<p class="text-xs text-muted truncate">' + esc(selected.email || '') + '</p></div>' +
-        '<span class="ml-auto">' + pill(selected.status === 'revoked' ? 'revoked' : 'active') + '</span></div>' +
+        '<p class="text-xs text-muted truncate">' + esc(selected.email || '') + '</p></div></div>' +
         (state.chatError ? '<p class="px-5 py-3 text-sm text-red-600">' + esc(state.chatError) + '</p>' : '') +
         '<div id="chat-message-list" class="flex-1 overflow-y-auto p-5">' + bubbles + '</div>' +
         (disabled
