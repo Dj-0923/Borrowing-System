@@ -256,6 +256,8 @@ the app is in the background or closed, Android/iOS displays the FCM
 notification payload directly. Account-request decisions are tracked in the
 app while pending and delivered through email after approval; they do not
 generate push alerts.
+Opening Loans or Notifications clears the corresponding navigation badge by
+marking feed entries as seen; they remain highlighted until explicitly read.
 
 ## What users and admins will see
 

@@ -1588,6 +1588,7 @@
       status: 'approved',
       returnVerificationStatus: 'rejected',
       returnRejectionReason: reason,
+      returnRejectionSeen: false,
       returnVerifiedAt: Date.now(),
       updatedAt: Date.now()
     }).then(function () {

@@ -117,6 +117,14 @@ service cloud.firestore {
                 'returnRejectionReason', 'updatedAt'
               ])
               && request.resource.data.updatedAt is int)
+            || (resource.data.status == 'approved'
+              && resource.data.returnVerificationStatus == 'rejected'
+              && request.resource.data.status == 'approved'
+              && request.resource.data.returnVerificationStatus == 'rejected'
+              && request.resource.data.returnRejectionSeen == true
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'returnRejectionSeen'
+              ]))
           ));
       allow delete: if isAdmin();
     }
@@ -245,8 +253,13 @@ service cloud.firestore {
           || (hasActiveAccount()
             && request.auth.uid == accountId
             && request.resource.data.diff(resource.data).affectedKeys()
-              .hasOnly(['isRead'])
-            && request.resource.data.isRead is bool);
+             .hasOnly(['isRead', 'isSeen'])
+           && (!request.resource.data.diff(resource.data).affectedKeys()
+             .hasAny(['isRead'])
+             || request.resource.data.isRead is bool)
+           && (!request.resource.data.diff(resource.data).affectedKeys()
+             .hasAny(['isSeen'])
+             || request.resource.data.isSeen is bool));
       }
     }
     match /admins/{adminId} {
