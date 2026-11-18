@@ -191,10 +191,12 @@ including linked loan and account-request records.
 ## Enable mobile notifications without Blaze
 
 The mobile app registers its FCM device token in Firestore. Admin and Fabii
-chat replies send an FCM push directly through the approval service when the
-message is saved. The Google Apps Script poller remains a retry fallback for
-chat pushes and handles loan request and return decisions and loan deadline
-reminders. Firebase Cloud Functions are not required for this setup.
+chat replies send an FCM push directly through the approval service after the
+message is saved; the push contains the reply text. Admin loan-request and
+return decisions also request a direct push immediately after the Firestore
+status update is saved. The Google Apps Script poller retries pending chat and
+loan pushes if direct delivery fails, and handles loan deadline reminders.
+Firebase Cloud Functions are not required for this setup.
 
 ### Configure the Apps Script poller
 

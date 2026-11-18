@@ -3,7 +3,10 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { sendChatNotification } = require("./chat-notification");
+const {
+  sendChatNotification,
+  sendLoanNotification,
+} = require("./chat-notification");
 
 function createHarness({
   preferences = {},
@@ -104,6 +107,8 @@ test("sends the phone push immediately and marks the shared notification sent", 
     data: {
       notificationId: "chat-message-1",
       type: "admin_chat_reply",
+      title: "New admin reply",
+      message: "Please return the item.",
       loanId: "",
     },
     android: {
@@ -123,12 +128,84 @@ test("supports immediate Fabii reply pushes", async () => {
     notificationId: "assistant-reply-1",
     type: "assistant_reply",
     title: "Fabii replied",
-    message: "Fabii has replied to your chat.",
+    message: "The camera is available.",
   });
 
   assert.equal(result.pushStatus, "sent");
   assert.equal(harness.sentMessages[0].data.type, "assistant_reply");
+  assert.equal(harness.sentMessages[0].data.message, "The camera is available.");
   assert.equal(harness.notification().type, "assistant_reply");
+});
+
+test("sends an approved-loan status and its exact message in the push payload", async () => {
+  const harness = createHarness();
+
+  const result = await sendLoanNotification({
+    db: harness.db,
+    messaging: harness.messaging,
+    fieldValue: { serverTimestamp: () => "server-time" },
+    borrowerUid: "borrower-1",
+    notificationId: "loan-1_approved",
+    type: "approved",
+    title: "Request approved",
+    message: "Camera has been approved.",
+    loanId: "loan-1",
+    logger: { error: () => {} },
+  });
+
+  assert.equal(result.pushStatus, "sent");
+  assert.deepEqual(harness.sentMessages[0].data, {
+    notificationId: "loan-1_approved",
+    type: "approved",
+    title: "Request approved",
+    message: "Camera has been approved.",
+    loanId: "loan-1",
+  });
+  assert.equal(harness.notification().preferenceKey, "requestUpdatesEnabled");
+});
+
+test("does not create or send a return notification when its preference is disabled", async () => {
+  const harness = createHarness({
+    preferences: { returnRemindersEnabled: false },
+  });
+
+  const result = await sendLoanNotification({
+    db: harness.db,
+    messaging: harness.messaging,
+    fieldValue: { serverTimestamp: () => "server-time" },
+    borrowerUid: "borrower-1",
+    notificationId: "loan-1_returned",
+    type: "returned",
+    title: "Item return confirmed",
+    message: "Camera has been marked as returned.",
+    loanId: "loan-1",
+    logger: { error: () => {} },
+  });
+
+  assert.equal(result.pushStatus, "disabled");
+  assert.equal(harness.sentMessages.length, 0);
+  assert.equal(harness.notification(), null);
+});
+
+test("sends a rejected-return push using the return reminder preference", async () => {
+  const harness = createHarness();
+
+  const result = await sendLoanNotification({
+    db: harness.db,
+    messaging: harness.messaging,
+    fieldValue: { serverTimestamp: () => "server-time" },
+    borrowerUid: "borrower-1",
+    notificationId: "loan-1_return_rejected_123",
+    type: "return_rejected",
+    title: "Return needs attention",
+    message: "Camera return was not approved: The lens is damaged.",
+    loanId: "loan-1",
+    logger: { error: () => {} },
+  });
+
+  assert.equal(result.pushStatus, "sent");
+  assert.equal(harness.sentMessages[0].notification.body, harness.sentMessages[0].data.message);
+  assert.equal(harness.notification().preferenceKey, "returnRemindersEnabled");
 });
 
 test("keeps the notification pending for Apps Script retry when direct FCM fails", async () => {

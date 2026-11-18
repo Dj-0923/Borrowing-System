@@ -9,7 +9,11 @@ const {
   fallbackBorrowerIntent,
   itemStatus,
 } = require("./borrower-assistant");
-const { sendChatNotification } = require("./chat-notification");
+const {
+  sendChatNotification,
+  sendLoanNotification,
+} = require("./chat-notification");
+const { buildLoanNotification } = require("./loan-notification");
 const { isAllowedApiRequest } = require("./request-origin");
 const { createHash, randomBytes, timingSafeEqual } = require("node:crypto");
 const http = require("node:http");
@@ -497,7 +501,7 @@ async function createAccountRequest(data) {
   return { success: true, requestId, statusToken };
 }
 
-async function sendFabiiReplyNotification(borrowerUid) {
+async function sendFabiiReplyNotification(borrowerUid, reply) {
   return sendChatNotification({
     db,
     messaging,
@@ -506,7 +510,7 @@ async function sendFabiiReplyNotification(borrowerUid) {
     notificationId: `assistant_${randomBytes(12).toString("hex")}`,
     type: "assistant_reply",
     title: "Fabii replied",
-    message: "Fabii has replied to your chat.",
+    message: String(reply || "Fabii has replied to your chat.").slice(0, 300),
   });
 }
 
@@ -542,6 +546,35 @@ async function notifyAdminChatReply(data, adminUid) {
     type: "admin_chat_reply",
     title: "New admin reply",
     message: String(message.text || "An admin replied to your chat.").slice(0, 300),
+  });
+}
+
+async function notifyLoanUpdate(data) {
+  const loanId = data && data.loanId;
+  if (
+    typeof loanId !== "string" ||
+    !/^[A-Za-z0-9_-]{1,150}$/.test(loanId)
+  ) {
+    throw new HttpError(400, "A valid loan ID is required.");
+  }
+
+  const loanSnapshot = await db.collection("loans").doc(loanId).get();
+  if (!loanSnapshot.exists) {
+    throw new HttpError(404, "The loan could not be found.");
+  }
+  const loan = loanSnapshot.data();
+  const notification = buildLoanNotification(loanId, loan);
+  if (!notification) return { pushStatus: "not-applicable" };
+  if (typeof loan.borrowerUid !== "string" || !loan.borrowerUid) {
+    throw new HttpError(409, "The loan has no borrower to notify.");
+  }
+
+  return sendLoanNotification({
+    db,
+    messaging,
+    fieldValue: FieldValue,
+    borrowerUid: loan.borrowerUid,
+    ...notification,
   });
 }
 
@@ -1565,6 +1598,7 @@ const server = http.createServer(async (request, response) => {
       "/reject-account",
       "/delete-account",
       "/notify-admin-chat",
+      "/notify-loan-update",
       "/borrower-assistant",
     ].includes(request.url)
   ) {
@@ -1586,7 +1620,10 @@ const server = http.createServer(async (request, response) => {
       const borrowerUid = await requireBorrower(request);
       const assistantResponse = await answerBorrowerAssistant(data, borrowerUid);
       try {
-        const push = await sendFabiiReplyNotification(borrowerUid);
+        const push = await sendFabiiReplyNotification(
+          borrowerUid,
+          assistantResponse.answer,
+        );
         if (push.pushStatus === "pending") {
           console.warn("Fabii's phone notification is queued for retry.", {
             borrowerUid,
@@ -1609,6 +1646,11 @@ const server = http.createServer(async (request, response) => {
     const adminUid = await requireAdmin(request);
     if (request.url === "/notify-admin-chat") {
       const result = await notifyAdminChatReply(data, adminUid);
+      sendJson(response, 200, result, origin);
+      return;
+    }
+    if (request.url === "/notify-loan-update") {
+      const result = await notifyLoanUpdate(data);
       sendJson(response, 200, result, origin);
       return;
     }

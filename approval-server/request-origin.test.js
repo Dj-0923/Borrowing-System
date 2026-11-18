@@ -38,27 +38,31 @@ test("allows native borrower POSTs without an Origin header", () => {
 });
 
 test("does not allow local origins to access admin endpoints", () => {
-  assert.equal(
-    isAllowedApiRequest({
-      origin: "http://localhost:49864",
-      method: "POST",
-      pathname: "/notify-admin-chat",
-      allowedOrigins,
-    }),
-    false,
-  );
+  for (const pathname of ["/notify-admin-chat", "/notify-loan-update"]) {
+    assert.equal(
+      isAllowedApiRequest({
+        origin: "http://localhost:49864",
+        method: "POST",
+        pathname,
+        allowedOrigins,
+      }),
+      false,
+    );
+  }
 });
 
 test("does not allow missing origins for protected admin endpoints", () => {
-  assert.equal(
-    isAllowedApiRequest({
-      origin: undefined,
-      method: "POST",
-      pathname: "/notify-admin-chat",
-      allowedOrigins,
-    }),
-    false,
-  );
+  for (const pathname of ["/notify-admin-chat", "/notify-loan-update"]) {
+    assert.equal(
+      isAllowedApiRequest({
+        origin: undefined,
+        method: "POST",
+        pathname,
+        allowedOrigins,
+      }),
+      false,
+    );
+  }
 });
 
 test("continues to allow the configured production app origin", () => {

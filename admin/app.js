@@ -924,6 +924,46 @@
       });
   }
 
+  function requestImmediateLoanPush(loanId) {
+    var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
+    if (!endpoint || !auth.currentUser) {
+      console.error('Could not request an immediate loan status push.');
+      toast('Status saved; its phone notification may be delayed while retry runs.', 'bad');
+      return;
+    }
+
+    auth.currentUser.getIdToken()
+      .then(function (idToken) {
+        return fetch(endpoint + '/notify-loan-update', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + idToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ loanId: loanId })
+        });
+      })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) {
+            throw new Error(body.error || 'Could not request the phone notification.');
+          }
+          return body;
+        });
+      })
+      .then(function (result) {
+        if (result.pushStatus === 'pending') {
+          toast('Status saved; its phone notification is queued for retry.', 'bad');
+        } else if (result.pushStatus === 'missing-account') {
+          toast('Status saved, but the borrower account could not be notified.', 'bad');
+        }
+      })
+      .catch(function (err) {
+        console.error('Could not send an immediate loan status notification.', err);
+        toast('Status saved; its phone notification may be delayed while retry runs.', 'bad');
+      });
+  }
+
   function sendChatMessage() {
     var account = db.accounts.find(function (item) { return item.id === state.chatUserId; });
     var text = state.chatDraft.trim();
@@ -1399,14 +1439,20 @@
     var cur = activeLoanFor(e.id);
     if (cur) { toast(e.name + ' is still on loan until ' + fmt(cur.end) + '. Mark it returned first.', 'bad'); return; }
     loansCol.doc(id).update({ status: 'approved', updatedAt: Date.now() })
-      .then(function () { toast('Approved ' + e.name + ' for ' + borrowerName(l) + '.'); })
+      .then(function () {
+        toast('Approved ' + e.name + ' for ' + borrowerName(l) + '.');
+        requestImmediateLoanPush(id);
+      })
       .catch(fail('Could not approve the request'));
   }
   function reject(id) {
     var l = db.loans.find(function (x) { return x.id === id; });
     if (!l || l.status !== 'pending') return;
     loansCol.doc(id).update({ status: 'rejected', updatedAt: Date.now() })
-      .then(function () { toast('Rejected the request from ' + borrowerName(l) + '.'); })
+      .then(function () {
+        toast('Rejected the request from ' + borrowerName(l) + '.');
+        requestImmediateLoanPush(id);
+      })
       .catch(fail('Could not reject the request'));
   }
   function approveRequest(id) {
@@ -1598,7 +1644,10 @@
     var l = db.loans.find(function (x) { return x.id === id; });
     if (!l || l.status !== 'approved') return;
     loansCol.doc(id).update({ status: 'returned', returnedOn: today(), updatedAt: Date.now() })
-      .then(function () { toast(l.name + ' marked as returned.'); })
+      .then(function () {
+        toast(l.name + ' marked as returned.');
+        requestImmediateLoanPush(id);
+      })
       .catch(fail('Could not mark it returned'));
   }
   function verifyReturn(id) {
@@ -1612,6 +1661,7 @@
       updatedAt: Date.now()
     }).then(function () {
       toast(loan.name + ' return verified.');
+      requestImmediateLoanPush(id);
     }).catch(fail('Could not verify the return'));
   }
   function rejectReturn(id, reason) {
@@ -1626,6 +1676,7 @@
       updatedAt: Date.now()
     }).then(function () {
       toast(loan.name + ' return was not verified. The borrower can review the reason and resubmit.');
+      requestImmediateLoanPush(id);
     }).catch(fail('Could not reject the return verification'));
   }
   function setMaintenance(id, on) {
@@ -1638,12 +1689,19 @@
   function deleteItem(id) {
     var e = eqById(id); if (!e || activeLoanFor(id)) return;
     var batch = fsdb.batch();
+    var rejectedLoanIds = [];
     db.loans.forEach(function (l) {
-      if (l.equipmentId === id && l.status === 'pending') batch.update(loansCol.doc(l.id), { status: 'rejected', updatedAt: Date.now() });
+      if (l.equipmentId === id && l.status === 'pending') {
+        batch.update(loansCol.doc(l.id), { status: 'rejected', updatedAt: Date.now() });
+        rejectedLoanIds.push(l.id);
+      }
     });
     batch.delete(equipmentCol.doc(id));
     batch.commit()
-      .then(function () { toast('Removed ' + e.name + ' from the inventory.'); })
+      .then(function () {
+        toast('Removed ' + e.name + ' from the inventory.');
+        rejectedLoanIds.forEach(requestImmediateLoanPush);
+      })
       .catch(fail('Could not remove the item'));
   }
 

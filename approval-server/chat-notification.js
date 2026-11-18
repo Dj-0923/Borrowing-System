@@ -4,8 +4,14 @@ const CHAT_NOTIFICATION_TYPES = new Set([
   "admin_chat_reply",
   "assistant_reply",
 ]);
+const LOAN_NOTIFICATION_PREFERENCES = {
+  approved: "requestUpdatesEnabled",
+  rejected: "requestUpdatesEnabled",
+  returned: "returnRemindersEnabled",
+  return_rejected: "returnRemindersEnabled",
+};
 
-async function sendChatNotification({
+async function sendBorrowerNotification({
   db,
   messaging,
   fieldValue,
@@ -14,12 +20,10 @@ async function sendChatNotification({
   type,
   title,
   message,
+  loanId = "",
+  preferenceKey,
   logger = console,
 }) {
-  if (!CHAT_NOTIFICATION_TYPES.has(type)) {
-    throw new TypeError("Unsupported chat notification type.");
-  }
-
   const accountRef = db.collection("accounts").doc(borrowerUid);
   const accountSnapshot = await accountRef.get();
   if (!accountSnapshot.exists) {
@@ -27,6 +31,10 @@ async function sendChatNotification({
   }
 
   const preferences = accountSnapshot.data().notificationPreferences || {};
+  if (preferenceKey !== "pushNotificationsEnabled" &&
+      preferenceKey && preferences[preferenceKey] === false) {
+    return { pushStatus: "disabled" };
+  }
   const pushEnabled = preferences.pushNotificationsEnabled !== false;
   const notificationRef = accountRef
     .collection("notifications")
@@ -37,7 +45,9 @@ async function sendChatNotification({
     try {
       await notificationRef.create({
         id: notificationId,
+        loanId,
         type,
+        preferenceKey,
         title,
         message: String(message || "").slice(0, 300),
         isRead: false,
@@ -79,7 +89,9 @@ async function sendChatNotification({
         data: {
           notificationId,
           type,
-          loanId: "",
+          title: String(title || ""),
+          message: String(message || "").slice(0, 300),
+          loanId: String(loanId || ""),
         },
         android: {
           priority: "high",
@@ -88,7 +100,7 @@ async function sendChatNotification({
       });
       return true;
     } catch (error) {
-      logger.error("Immediate chat push failed.", {
+      logger.error("Immediate phone push failed.", {
         notificationId,
         borrowerUid,
         deviceId: device.id,
@@ -123,4 +135,27 @@ async function sendChatNotification({
   return { pushStatus: "pending" };
 }
 
-module.exports = { sendChatNotification };
+async function sendChatNotification(options) {
+  if (!CHAT_NOTIFICATION_TYPES.has(options.type)) {
+    throw new TypeError("Unsupported chat notification type.");
+  }
+  return sendBorrowerNotification({
+    ...options,
+    loanId: "",
+    preferenceKey: "pushNotificationsEnabled",
+  });
+}
+
+async function sendLoanNotification(options) {
+  const preferenceKey = LOAN_NOTIFICATION_PREFERENCES[options.type];
+  if (!preferenceKey) {
+    throw new TypeError("Unsupported loan notification type.");
+  }
+  return sendBorrowerNotification({ ...options, preferenceKey });
+}
+
+module.exports = {
+  sendBorrowerNotification,
+  sendChatNotification,
+  sendLoanNotification,
+};

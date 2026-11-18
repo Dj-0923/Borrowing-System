@@ -7,7 +7,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "lint": "node --check index.js && node --check borrower-assistant.js && node --check chat-notification.js && node --check request-origin.js",
+    "lint": "node --check index.js && node --check borrower-assistant.js && node --check chat-notification.js && node --check loan-notification.js && node --check request-origin.js",
     "test": "node --test"
   },
   "dependencies": {
