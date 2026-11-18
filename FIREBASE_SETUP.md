@@ -198,8 +198,8 @@ deletion, including linked loan and account-request records.
 
 The mobile app registers its FCM device token in Firestore. A time-driven
 Google Apps Script poller sends admin-chat replies, loan request and return
-decisions, and return deadline reminders. The approval service queues account
-request and Fabii notifications for the poller. Firebase Cloud Functions are
+decisions, and loan deadline reminders. The approval service queues Fabii
+notifications for the poller. Firebase Cloud Functions are
 not required for this setup.
 
 ### Configure the Apps Script poller
@@ -232,8 +232,7 @@ not required for this setup.
    `installLendyNotificationPoller` once. It creates a five-minute trigger and
    records a start cursor so old chat and loan updates are not replayed.
 6. Deploy the latest `approval-server/` changes to the existing Render
-   service. Account decisions and Fabii replies are queued there for the
-   poller. The Render service can still sleep between API requests; a request
+   service. Fabii replies are queued there for the poller. The Render service can still sleep between API requests; a request
    wakes it, and its notification is sent on a later Apps Script poll.
 
 The root `firestore.indexes.json` config preserves the normal collection
@@ -253,9 +252,8 @@ Apps Script quotas still apply; a personal Google account currently has a
 
 Push alerts are not rendered by the app while it is in the foreground. While
 the app is closed or in the background, Android/iOS displays the FCM
-notification. Account-request decisions can be pushed before sign-in because
-the approval service copies the request's device token to a restricted,
-short-lived server-side queue item before removing the request credentials.
+notification. Account-request decisions are tracked in the app while pending
+and delivered through email after approval; they do not generate push alerts.
 
 ## What users and admins will see
 

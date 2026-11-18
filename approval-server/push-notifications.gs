@@ -42,7 +42,6 @@ function runLendyNotificationPoller() {
     lendyRetryPendingNotifications_(projectId);
     lendyProcessLoanUpdates_(projectId, properties);
     lendyProcessAdminChatReplies_(projectId, properties);
-    lendyProcessAccountPushQueue_(projectId);
     lendyProcessDueReminders_(projectId, properties);
   } finally {
     lock.releaseLock();
@@ -306,39 +305,6 @@ function lendyRetryPendingNotifications_(projectId) {
       preferenceKey: notification.preferenceKey ||
         lendyPreferenceKeyForType_(notification.type),
     }, notification);
-  });
-}
-
-function lendyProcessAccountPushQueue_(projectId) {
-  var documents = lendyRunQuery_(projectId, {
-    from: [{ collectionId: "pushNotificationQueue" }],
-    where: {
-      fieldFilter: {
-        field: { fieldPath: "status" },
-        op: "EQUAL",
-        value: { stringValue: "pending" },
-      },
-    },
-  });
-
-  documents.forEach(function (document) {
-    var event = lendyDocumentData_(document);
-    var eventPath = lendyDocumentPath_(document).join("/");
-    if (!eventPath || !event.targetToken) return;
-    var result = lendySendFcmToToken_(projectId, event.targetToken, {
-      notificationId: event.notificationId,
-      type: event.type,
-      loanId: event.loanId || "",
-      title: event.title,
-      message: event.message,
-    });
-    if (result.sent || result.invalidToken) {
-      lendyPatchFields_(projectId, eventPath, {
-        status: { stringValue: result.sent ? "sent" : "invalid" },
-        targetToken: { nullValue: null },
-        processedAt: { timestampValue: new Date().toISOString() },
-      });
-    }
   });
 }
 

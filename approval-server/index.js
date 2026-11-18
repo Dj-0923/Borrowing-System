@@ -386,7 +386,6 @@ async function createAccountRequest(data) {
   const gender = data && data.gender;
   const yearLevel = data && data.yearLevel;
   const block = data && data.block;
-  const notificationToken = data && data.notificationToken;
 
   if (!isValidEmail(email)) {
     throw new HttpError(400, "Enter a valid email address.", "invalid-email");
@@ -407,15 +406,6 @@ async function createAccountRequest(data) {
   ) {
     throw new HttpError(400, "Choose a valid year level and block.", "invalid-details");
   }
-  if (
-    notificationToken != null &&
-    (typeof notificationToken !== "string" ||
-      notificationToken.length === 0 ||
-      notificationToken.length > 4096)
-  ) {
-    throw new HttpError(400, "The notification registration is invalid.");
-  }
-
   const accounts = db.collection("accounts");
   const accountRequests = db.collection("accountRequests");
   const [matchingAccounts, matchingRequests] = await Promise.all([
@@ -494,12 +484,6 @@ async function createAccountRequest(data) {
         );
       }
       transaction.create(requestRef, requestData);
-      if (notificationToken) {
-        transaction.create(
-          requestRef.collection("privateCredentials").doc("push-device"),
-          { token: notificationToken },
-        );
-      }
       transaction.create(lockRef, { requestId, email, createdAt: now });
     });
   } catch (error) {
@@ -508,31 +492,6 @@ async function createAccountRequest(data) {
     throw new HttpError(500, "Could not submit the account request.");
   }
   return { success: true, requestId, statusToken };
-}
-
-async function sendAccountRequestPush(requestRef, eventId, type, title, body) {
-  const deviceRef = requestRef
-    .collection("privateCredentials")
-    .doc("push-device");
-  const device = await deviceRef.get();
-  const token = device.data()?.token;
-  if (!device.exists || typeof token !== "string" || !token) return;
-
-  const queueRef = db.collection("pushNotificationQueue").doc(eventId);
-  await db.runTransaction(async (transaction) => {
-    const queuedEvent = await transaction.get(queueRef);
-    if (queuedEvent.exists) return;
-    transaction.create(queueRef, {
-      notificationId: eventId,
-      type,
-      loanId: "",
-      title,
-      message: body,
-      targetToken: token,
-      status: "pending",
-      createdAt: FieldValue.serverTimestamp(),
-    });
-  });
 }
 
 async function sendFabiiReplyNotification(borrowerUid) {
@@ -882,29 +841,13 @@ async function approveRequest(data) {
       "The account was approved and its temporary password was emailed, but the request email lock could not be cleared.",
     );
   }
-  try {
-    await sendAccountRequestPush(
-      requestRef,
-      requestId + "_approved",
-      "account_approved",
-      "Account approved",
-      "Your Lendy account request was approved. Sign in with the temporary password sent to your email.",
-    );
-  } catch (error) {
-    console.error("Could not send the account approval push notification.", {
-      requestId,
-      error: error.message,
-    });
-  } finally {
-    try {
-      await requestRef.collection("privateCredentials").doc("push-device").delete();
-    } catch (error) {
-      console.error("Could not remove the account-request device token.", {
+  await requestRef.collection("privateCredentials").doc("push-device").delete()
+    .catch((error) => {
+      console.error("Could not remove a legacy account-request device token.", {
         requestId,
         error: error.message,
       });
-    }
-  }
+    });
   return { success: true, emailSent: true };
 }
 
@@ -977,20 +920,6 @@ async function rejectAccountRequest(data) {
     }
   }
 
-  try {
-    await sendAccountRequestPush(
-      requestRef,
-      requestId + "_rejected",
-      "account_rejected",
-      "Account request not approved",
-      "Your Lendy account request was not approved.",
-    );
-  } catch (error) {
-    console.error("Could not send the account rejection push notification.", {
-      requestId,
-      error: error.message,
-    });
-  }
   await deleteRequestCredentials(requestRef);
   await requestRef.delete();
   await releaseRequestEmailLock(normalizedEmail(request.email), requestId);
