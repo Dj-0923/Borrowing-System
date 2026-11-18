@@ -294,7 +294,10 @@ function itemStatus(item, activeLoans = []) {
   if (loans.some((loan) => loan.status === "return_pending")) {
     return "Return Pending";
   }
-  if (loans.some((loan) => loan.status === "approved")) return "Borrowed";
+  if (loans.some((loan) => loan.status === "approved" && loan.checkedOutAt)) {
+    return "Borrowed";
+  }
+  if (loans.some((loan) => loan.status === "approved")) return "Reserved";
   return "Available";
 }
 

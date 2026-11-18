@@ -42,7 +42,7 @@ test("does not allow local origins to access admin endpoints", () => {
     isAllowedApiRequest({
       origin: "http://localhost:49864",
       method: "POST",
-      pathname: "/assistant",
+      pathname: "/notify-admin-chat",
       allowedOrigins,
     }),
     false,
@@ -54,7 +54,7 @@ test("does not allow missing origins for protected admin endpoints", () => {
     isAllowedApiRequest({
       origin: undefined,
       method: "POST",
-      pathname: "/assistant",
+      pathname: "/notify-admin-chat",
       allowedOrigins,
     }),
     false,

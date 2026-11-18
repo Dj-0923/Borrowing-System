@@ -481,11 +481,10 @@
 
   /* ---------- ui state ---------- */
   var state = {
-    view: 'dashboard', lastView: null, lastChartKey: null, chartMode: 'day', chartAnimation: false, sidebarOpen: false, assistantOpen: false, modal: null,
+    view: 'dashboard', lastView: null, lastChartKey: null, chartMode: 'day', chartAnimation: false, sidebarOpen: false, modal: null,
     filter: { inventory: 'all', history: 'all', usersRole: 'all', usersCourse: 'all' }, q: { inventory: '', history: '', users: '', messages: '' },
     chatUserId: null, chatMessages: [], chatError: null, chatDraft: '',
-    tab: { requests: 'pending' },
-    chat: [{ from: 'bot', text: "Hi, I'm the Lendy assistant. Ask me what's going on with the equipment." }]
+    tab: { requests: 'pending' }
   };
   var pendingConfirm = null;
 
@@ -899,6 +898,32 @@
     return Array.from(String(name || '')).slice(0, 150).join('');
   }
 
+  function notifyAdminChatReply(borrowerUid, messageId) {
+    var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
+    if (!endpoint) return Promise.reject(new Error('The approval service URL is not configured.'));
+    if (!auth.currentUser) return Promise.reject(new Error('Your admin sign-in has expired.'));
+
+    return auth.currentUser.getIdToken()
+      .then(function (idToken) {
+        return fetch(endpoint + '/notify-admin-chat', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + idToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ borrowerUid: borrowerUid, messageId: messageId })
+        });
+      })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) {
+            throw new Error(body.error || 'Could not notify the borrower.');
+          }
+          return body;
+        });
+      });
+  }
+
   function sendChatMessage() {
     var account = db.accounts.find(function (item) { return item.id === state.chatUserId; });
     var text = state.chatDraft.trim();
@@ -931,6 +956,14 @@
     batch.commit().then(function () {
       state.chatDraft = '';
       render();
+      notifyAdminChatReply(account.id, messageRef.id).then(function (result) {
+        if (result.pushStatus === 'pending') {
+          toast('Message sent; the phone notification is queued for retry.', 'bad');
+        }
+      }).catch(function (err) {
+        console.error('Could not send an immediate admin chat notification.', err);
+        toast('Message sent, but its phone notification may be delayed.', 'bad');
+      });
     }).catch(fail('Could not send message'));
   }
 
@@ -1942,324 +1975,8 @@
       });
   }
 
-  /* ---------- assistant ---------- */
-  var ASK = [['overdue', "What's overdue?"], ['available', "What's available?"], ['borrowers', 'How many are borrowing?'], ['accounts', 'Account names'], ['pending', 'Pending requests'], ['busiest', 'Busiest day'], ['summary', 'Quick summary']];
-  function activeBorrowers() {
-    var seen = Object.create(null);
-    return db.loans.filter(function (loan) {
-      return loan.status === 'approved';
-    }).reduce(function (borrowers, loan) {
-      var name = borrowerName(loan);
-      var key = loan.borrowerUid ? 'uid:' + loan.borrowerUid : 'name:' + normName(name);
-      if (key === 'name:' || seen[key]) return borrowers;
-      seen[key] = true;
-      borrowers.push(name || 'Unknown borrower');
-      return borrowers;
-    }, []);
-  }
-  function answer(key) {
-    var s = stats(), t = today(), list;
-    if (key === 'overdue') {
-      list = db.loans.filter(function (l) { return loanStatus(l) === 'overdue'; });
-      return list.length ? plural(list.length, 'item') + ' overdue: ' + list.map(function (l) { return l.name + ' (' + borrowerName(l) + ', ' + diffDays(t, l.end) + 'd late)'; }).join('; ') + '.' : 'Nothing is overdue right now.';
-    }
-    if (key === 'available') {
-      list = db.equipment.filter(function (e) { return itemStatus(e) === 'available'; });
-      return list.length ? list.length + ' of ' + s.total + ' available: ' + list.map(function (e) { return e.name; }).join(', ') + '.' : 'Nothing is available to borrow right now.';
-    }
-    if (key === 'pending') {
-      list = db.loans.filter(function (l) { return l.status === 'pending'; });
-      return list.length ? plural(list.length, 'request') + ' waiting: ' + list.map(function (l) { return borrowerName(l) + ' wants ' + l.name + ' (' + fmt(l.start) + ')'; }).join('; ') + '.' : 'No pending requests. The approval queue is clear.';
-    }
-    if (key === 'borrowers') {
-      list = activeBorrowers();
-      return list.length
-        ? list.length + ' ' + (list.length === 1 ? 'person is' : 'people are') + ' currently borrowing: ' + list.join(', ') + '.'
-        : 'No one is currently borrowing equipment.';
-    }
-    if (key === 'accounts') {
-      list = db.accounts.slice().sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || '')); });
-      return list.length
-        ? list.map(function (account) {
-          return (account.name || 'Unnamed account') +
-            (account.role ? ' (' + account.role + ')' : '') + ' — ' + accountCreatedDate(account);
-        }).join(', ') + '.'
-        : 'There are no user accounts in the database.';
-    }
-    if (key === 'account-created') {
-      var account = mentionedAccount(state.lastQuestion || '');
-      if (!account) return 'I couldn\u2019t find that account. Please include the person\u2019s name in your question.';
-      return account.name + '\u2019s account record ' + accountCreatedDate(account) + '.';
-    }
-    if (key === 'busiest') {
-      var days = chartData('day');
-      var top = Math.max.apply(null, days.map(function (day) { return day.count; }));
-      if (!top) return 'There were no checkouts in the last 7 days.';
-      var busiest = days.filter(function (day) { return day.count === top; });
-      var names = busiest.map(function (day) {
-        return DAY_LONG[DAY.indexOf(day.label)].replace(/s$/, '');
-      });
-      if (names.length === 1) {
-        return names[0] + ' was the busiest day, with ' + plural(top, 'checkout') + ' in the last 7 days.';
-      }
-      var joinedNames = names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
-      return joinedNames + ' were tied for the busiest, with ' + plural(top, 'checkout') + ' each in the last 7 days.';
-    }
-    if (key === 'busiest-month') {
-      var months = chartData('month');
-      var busiestCount = Math.max.apply(null, months.map(function (month) { return month.count; }));
-      if (!busiestCount) return 'There were no checkouts in the dashboard\u2019s last 12 months.';
-      var busiestMonths = months.filter(function (month) { return month.count === busiestCount; });
-      var monthNames = busiestMonths.map(function (month) { return month.sub; });
-      return monthNames.join(' and ') + (monthNames.length === 1 ? ' was' : ' were') +
-        ' busiest, with ' + plural(busiestCount, 'checkout') + ' each in the last 12 months.';
-    }
-    return s.total + ' items: ' + s.available + ' available, ' + s.borrowed + ' borrowed, ' + s.maintenance + ' in maintenance. ' +
-      s.pending + ' pending and ' + s.overdue + ' overdue.';
-  }
-  function accountCreatedDate(account) {
-    if (account.createdAt == null) return 'has no creation date saved';
-    var createdAt = typeof account.createdAt.toDate === 'function'
-      ? account.createdAt.toDate()
-      : new Date(account.createdAt);
-    if (isNaN(createdAt.getTime())) return 'has an invalid saved creation date';
-    return 'was created on ' + MON[createdAt.getMonth()] + ' ' +
-      createdAt.getDate() + ', ' + createdAt.getFullYear();
-  }
-  function mentionedAccount(text) {
-    var question = normName(text);
-    var accounts = db.accounts.slice().sort(function (a, b) {
-      return String(b.name || '').length - String(a.name || '').length;
-    });
-    return accounts.find(function (account) {
-      var name = normName(account.name);
-      var email = normName(account.email);
-      return (name && question.indexOf(name) !== -1) ||
-        (email && question.indexOf(email) !== -1);
-    }) || null;
-  }
-  function dashboardCheckoutAnswer(text) {
-    var question = text.toLowerCase();
-    if (!/\b(?:how many|number of|count|total)\b/.test(question)) return null;
-
-    var monthMatch = MON_LONG.findIndex(function (month) {
-      return new RegExp('\\b' + month + '\\b', 'i').test(question);
-    });
-    var dayMatch = DAY_LONG.findIndex(function (day, index) {
-      return new RegExp('\\b(?:' + day + '|' + day.slice(0, -1) + '|' +
-        DAY[index] + ')\\b', 'i').test(question);
-    });
-    if (!/\b(?:checkouts?|borrow(?:ed|ing)?|loans?)\b/.test(question) &&
-        monthMatch === -1 && dayMatch === -1 &&
-        !/\b(?:day|daily|week|month|monthly)\b/.test(question)) return null;
-
-    var monthMode = monthMatch !== -1 ||
-      /\b(?:month|monthly|months)\b/.test(question);
-    if (monthMode) {
-      var months = chartData('month');
-      var requestedYear = question.match(/\b20\d{2}\b/);
-      if (/\b(?:this|current)\s+month\b/.test(question)) {
-        var currentMonth = months.find(function (month) { return month.isNow; });
-        return currentMonth.sub + ' had ' +
-          plural(currentMonth.count, 'checkout') + ' in the dashboard.';
-      }
-      if (/\b(?:last|previous|past)\s+month\b/.test(question)) {
-        var previousMonth = months[months.length - 2];
-        return previousMonth.sub + ' had ' +
-          plural(previousMonth.count, 'checkout') + ' in the dashboard.';
-      }
-      if (monthMatch !== -1) {
-        var monthName = MON_LONG[monthMatch];
-        var matchingMonths = months.filter(function (month) {
-          return month.label === MON[monthMatch] &&
-            (!requestedYear || month.sub.endsWith(requestedYear[0]));
-        });
-        if (!matchingMonths.length) {
-          return 'There are no checkouts for ' + monthName +
-            (requestedYear ? ' ' + requestedYear[0] : '') +
-            ' in the dashboard\u2019s last 12 months.';
-        }
-        var selectedMonth = matchingMonths[0];
-        return selectedMonth.sub + ' had ' +
-          plural(selectedMonth.count, 'checkout') + ' in the dashboard.';
-      }
-
-      if (/\b(?:each|every|per|all|monthly|by month)\b/.test(question)) {
-        return 'Dashboard checkouts by month (last 12 months): ' +
-          months.map(function (month) {
-            return month.sub + ': ' + month.count;
-          }).join('; ') + '.';
-      }
-      var monthTotal = months.reduce(function (sum, month) { return sum + month.count; }, 0);
-      return 'There were ' + plural(monthTotal, 'checkout') +
-        ' in the dashboard\u2019s last 12 months.';
-    }
-
-    var days = chartData('day');
-    if (dayMatch !== -1) {
-      var selectedDay = days.find(function (day) {
-        return DAY[dayMatch] === day.label;
-      });
-      return selectedDay.sub + ' (' + DAY_LONG[dayMatch] + ') had ' +
-        plural(selectedDay.count, 'checkout') + ' in the dashboard.';
-    }
-    if (/\b(?:each|every|per|daily|by day)\b/.test(question)) {
-      return 'Dashboard checkouts by day (last 7 days): ' +
-        days.map(function (day) {
-          return day.sub + ': ' + day.count;
-        }).join('; ') + '.';
-    }
-    var dayTotal = days.reduce(function (sum, day) { return sum + day.count; }, 0);
-    return 'There were ' + plural(dayTotal, 'checkout') +
-      ' in the dashboard\u2019s last 7 days.';
-  }
-  function answerFreeText(text) {
-    var t = text.toLowerCase();
-    state.lastQuestion = text;
-    var periodAnswer = dashboardCheckoutAnswer(text);
-    if (periodAnswer !== null) return periodAnswer;
-    var key = /\b(?:when|what date).*(?:account|created|made|join(?:ed)?|registered|signed up)|(?:account|created|made|join(?:ed)?|registered|signed up).*(?:when|date)/.test(t) ? 'account-created'
-      : /\b(?:who|list|show|what are).*(?:users?|accounts?|members?|students?|faculty|names?)\b|\b(?:account|user|member)\s+names?\b/.test(t) ? 'accounts'
-      : /(?:how many|number of|count of).*(?:people|users|borrowers?|borrowing|borrow)|who(?:'s| is) borrowing/.test(t) ? 'borrowers'
-      : /overdue|late/.test(t) ? 'overdue'
-      : /available|free|open/.test(t) ? 'available'
-      : /pending|waiting|queue|request/.test(t) ? 'pending'
-      : /busiest|busy|popular|peak/.test(t) && /\bmonths?\b/.test(t) ? 'busiest-month'
-      : /busiest|busy|popular|peak/.test(t) ? 'busiest'
-      : /summary|overview|status|how.*(going|things)/.test(t) ? 'summary'
-      : null;
-    return key ? answer(key) : null;
-  }
-  function askAssistantApi(question, message) {
-    var endpoint = String(window.LENDY_APPROVAL_API_URL || '').trim().replace(/\/+$/, '');
-    if (!endpoint) {
-      completeAssistantReply(message, 'The AI assistant service URL is not configured. Please contact the administrator.');
-      return;
-    }
-    if (!auth.currentUser) {
-      completeAssistantReply(message, 'Your admin sign-in has expired. Sign in again to ask a question.');
-      return;
-    }
-    auth.currentUser.getIdToken()
-      .then(function (idToken) {
-        return fetch(endpoint + '/assistant', {
-          method: 'POST',
-          headers: {
-            Authorization: 'Bearer ' + idToken,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ question: question })
-        });
-      })
-      .then(function (response) {
-        return response.json().then(function (body) {
-          if (!response.ok) throw new Error(body.error || 'Assistant service returned HTTP ' + response.status + '.');
-          if (typeof body.answer !== 'string') throw new Error('Assistant service returned an invalid answer.');
-          return body.answer;
-        });
-      })
-      .then(function (answerText) {
-        completeAssistantReply(message, answerText);
-      })
-      .catch(function (err) {
-        console.error('Lendy assistant request failed.', err);
-        completeAssistantReply(message, err.message || 'Could not reach the assistant. Please try again.');
-      });
-  }
-  var assistantMinimumTypingDuration = 3000;
-  function startAssistantTyping(message) {
-    message.typing = true;
-    message.typingStartedAt = Date.now();
-    renderAssistant();
-  }
-  function completeAssistantReply(message, text) {
-    message.replyText = text;
-    message.replyReady = true;
-    finishAssistantReplyWhenReady(message);
-  }
-  function finishAssistantReplyWhenReady(message) {
-    if (!message.replyReady || !message.typing || message.completionScheduled) return;
-    message.completionScheduled = true;
-    var remaining = Math.max(
-      0,
-      assistantMinimumTypingDuration - (Date.now() - message.typingStartedAt)
-    );
-    window.setTimeout(function () {
-      message.text = message.replyText;
-      message.typing = false;
-      renderAssistant();
-    }, remaining);
-  }
-  function submitAssistant(form) {
-    var input = document.getElementById('assistant-input');
-    sendAssistantMessage(input.value, null);
-    var again = document.getElementById('assistant-input');
-    if (again) again.focus();
-  }
-  function sendAssistantMessage(text, key) {
-    text = String(text || '').trim();
-    if (!text) return;
-    state.chat.push({ from: 'me', text: text });
-    var pendingMessage = { from: 'bot' };
-    state.chat.push(pendingMessage);
-    startAssistantTyping(pendingMessage);
-    renderAssistant();
-    try {
-      var localAnswer = key ? answer(key) : answerFreeText(text);
-      var complexQuestion = /\b(and|also|plus|while|along with|as well as|both)\b/i.test(text);
-      if (!key && (localAnswer === null || complexQuestion)) {
-        askAssistantApi(text, pendingMessage);
-        return;
-      }
-      completeAssistantReply(pendingMessage, localAnswer);
-    } catch (err) {
-      console.error('Lendy assistant could not answer from the current data.', err);
-      completeAssistantReply(
-        pendingMessage,
-        'I couldn\u2019t read the current equipment data to answer. Please check the dashboard data and try again.'
-      );
-    }
-  }
-  function renderAssistant(animateOpen) {
-    var root = $('#assistant-root');
-    var panel = '';
-    if (state.assistantOpen) {
-      panel = '<div class="' + (animateOpen ? 'pop ' : '') + 'assistant-panel fixed right-4 sm:right-5 z-40 rounded-2xl bg-card border border-line shadow-2xl flex flex-col overflow-hidden" style="bottom:calc(5.75rem + env(safe-area-inset-bottom,0px))" role="dialog" aria-label="Lendy assistant">' +
-        '<div class="flex items-center justify-between px-4 py-3 text-white" style="background:linear-gradient(90deg,var(--side-from),var(--side-to))"><span class="font-display font-bold">Ask Lendy</span>' +
-        '<button data-action="assistant-toggle" class="w-7 h-7 rounded-md flex items-center justify-center hover:bg-white/15" aria-label="Close assistant">' + icon('x', 'w-4 h-4') + '</button></div>' +
-        '<div id="chat-log" class="assistant-chat-log p-4 grid content-start gap-2.5 overflow-y-auto text-sm">' +
-        state.chat.map(function (m) {
-          if (m.from === 'me') {
-            return '<div class="justify-self-end max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-white" style="background:var(--btn-bg)">' + esc(m.text) + '</div>';
-          }
-          if (m.typing) {
-            return '<div class="assistant-typing justify-self-start rounded-2xl rounded-bl-md px-4 py-3 bg-tint" role="status" aria-label="Lendy is typing">' +
-              '<span></span><span></span><span></span></div>';
-          }
-          return '<div class="justify-self-start max-w-[90%] rounded-2xl rounded-bl-md px-3.5 py-2 bg-tint">' + esc(m.text) + '</div>';
-        }).join('') + '</div>' +
-        (state.chat.length === 1
-          ? '<div class="px-4 pb-3 flex flex-wrap gap-2">' + ASK.map(function (a) { return '<button class="chip" data-action="assistant-ask" data-key="' + a[0] + '">' + a[1] + '</button>'; }).join('') + '</div>'
-          : '') +
-        '<form id="assistant-form" class="px-4 pb-4 flex gap-2 border-t border-line pt-3">' +
-        '<input id="assistant-input" type="text" class="field flex-1" placeholder="Ask about equipment\u2026" autocomplete="off" maxlength="200">' +
-        '<button type="submit" class="w-10 h-10 shrink-0 rounded-xl text-white flex items-center justify-center" style="background:var(--btn-bg)" aria-label="Send">' + icon('send', 'w-4 h-4') + '</button>' +
-        '</form></div>';
-    }
-    root.innerHTML = panel +
-      '<button data-action="assistant-toggle" class="fixed right-4 sm:right-5 z-40 w-14 h-14 rounded-full text-white flex items-center justify-center shadow-xl transition hover:scale-105" ' +
-      'style="bottom:calc(1.25rem + env(safe-area-inset-bottom,0px));background:#0e5a4d;box-shadow:0 0 0 3px #22917e inset,0 10px 24px -8px rgba(0,0,0,.4)" aria-label="' + (state.assistantOpen ? 'Close' : 'Open') + ' assistant" aria-expanded="' + state.assistantOpen + '">' +
-      icon('bot', 'w-7 h-7') + '</button>';
-    var log = $('#chat-log'); if (log) log.scrollTop = log.scrollHeight;
-  }
-
   /* ---------- events ---------- */
   document.addEventListener('click', function (ev) {
-    var assistantRoot = $('#assistant-root');
-    if (state.assistantOpen && assistantRoot && !assistantRoot.contains(ev.target)) {
-      state.assistantOpen = false;
-      renderAssistant();
-    }
     var el = ev.target.closest('[data-action]');
     if (!el) return;
     var a = el.dataset.action, id = el.dataset.id;
@@ -2357,14 +2074,6 @@
       case 'backdrop': if (ev.target === el) closeModal(); break;
       case 'close-modal': closeModal(); break;
       case 'confirm-yes': var fn = pendingConfirm; closeModal(); if (fn) fn(); break;
-      case 'assistant-toggle':
-        state.assistantOpen = !state.assistantOpen;
-        renderAssistant(state.assistantOpen);
-        break;
-      case 'assistant-ask':
-        var q = ASK.find(function (x) { return x[0] === el.dataset.key; });
-        if (q) sendAssistantMessage(q[1], q[0]);
-        break;
     }
   });
   document.addEventListener('input', function (ev) {
@@ -2417,17 +2126,14 @@
     else if (form.dataset.form === 'approve-account') submitApproveRequest(form);
     else if (form.dataset.form === 'edit-profile') submitEditProfile(form);
     else if (form.dataset.form === 'chat') sendChatMessage();
-    else if (form.id === 'assistant-form') submitAssistant(form);
   });
   document.addEventListener('keydown', function (ev) {
     if (ev.key !== 'Escape') return;
     if (state.modal) closeModal();
-    else if (state.assistantOpen) { state.assistantOpen = false; renderAssistant(); }
     else if (state.sidebarOpen) { state.sidebarOpen = false; render(); }
   });
   document.addEventListener('visibilitychange', function () { if (!document.hidden) render(); });
 
   render();
-  renderAssistant();
   }
 })();

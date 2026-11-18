@@ -10,6 +10,7 @@ const {
   findInventoryCategory,
   fallbackBorrowerIntent,
   isBorrowerDomainQuestion,
+  itemStatus,
 } = require("./borrower-assistant");
 
 const equipment = [
@@ -37,6 +38,23 @@ const equipment = [
     maintenance: true,
   },
 ];
+
+test("approved inventory is Reserved before checkout and Borrowed after checkout", () => {
+  const item = equipment[0];
+
+  assert.equal(
+    itemStatus(item, [{ equipmentId: item.id, status: "approved" }]),
+    "Reserved",
+  );
+  assert.equal(
+    itemStatus(item, [{
+      equipmentId: item.id,
+      status: "approved",
+      checkedOutAt: 1_700_000_000_000,
+    }]),
+    "Borrowed",
+  );
+});
 
 test("available items excludes checked-out, returned-for-verification, and maintenance items", () => {
   const { answer, items } = buildBorrowerAssistantResponse({
@@ -84,7 +102,7 @@ test("inventory results report backend-derived statuses and exclude unavailable 
   assert.deepEqual(
     items.map((item) => [item.name, item.status]),
     [
-      ["Sony Camera", "Borrowed"],
+      ["Sony Camera", "Reserved"],
       ["Canon Camera", "Available"],
       ["Projector", "Return Pending"],
       ["Tablet", "In Maintenance"],
@@ -444,7 +462,7 @@ test("grounded item answers include only real item cards and use the supplied fa
 
   assert.match(answer, /AV Room/);
   assert.deepEqual(items.map((item) => item.id), ["camera-1"]);
-  assert.equal(items[0].status, "Borrowed");
+  assert.equal(items[0].status, "Reserved");
 });
 
 test("profile summaries include the user's saved profile information", () => {

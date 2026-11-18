@@ -6,9 +6,9 @@ but does not create a Firebase Authentication user. Only after admin approval
 does the service create the sign-in account, generate a temporary password,
 and email it to the requester. The approval is rolled back if the email cannot
 be sent. Email is sent by a small Google Apps Script web app using Gmail over
-HTTPS, so the Render Free service does not need SMTP access. Push notifications
-are sent by a separate Google Apps Script poller so the Firebase project can
-remain on the Spark plan.
+HTTPS, so the Render Free service does not need SMTP access. Chat reply pushes
+are sent directly by the approval service; the Apps Script poller handles
+loan-related pushes and retries, so the Firebase project can remain on Spark.
 
 ## Configure Firebase
 
@@ -143,15 +143,8 @@ permission prompt. A successful execution logs the remaining daily recipient
 quota. Then update the web app deployment to the latest code version and
 redeploy Render.
 
-The admin assistant uses Gemini only to turn an admin's question into a
-restricted set of supported database queries. The service verifies the admin,
-reads the relevant Firestore collections, and formats the answer itself; it
-does not send Firestore records or query results to Gemini. Before sending a
-question, it replaces matching account names, emails, and ID numbers with
-temporary tokens and removes email addresses and phone-number-like values.
-The Gemini key stays in Render and must never be added to dashboard JavaScript.
-The service uses Gemini 3.8 Flash through the Interactions API with storage
-disabled (`store: false`); only sanitized questions are sent to the model.
+The Admin dashboard chatbot has been removed. `GEMINI_API_KEY` is used by the
+mobile Fabii assistant and must never be added to dashboard JavaScript.
 
 The free Gemini tier has usage limits, and Google may use unpaid-service
 prompts to improve its products. Do not include personal or confidential
@@ -184,23 +177,24 @@ aims to answer in the language and style of the question. Unrelated questions
 receive a message explaining the assistant's Lendy-only scope rather than a
 generated answer. When Gemini is not configured or unavailable, limited
 keyword matching is used for supported inventory and account questions. The
-borrower endpoint is separate from the admin-only `/assistant` endpoint.
+mobile borrower assistant is separate from the Admin dashboard.
 Profile summaries may include the signed-in user's saved contact and student
 details, but never expose passwords, internal authentication IDs, or raw image
 data.
 
-The service account must be able to manage Firebase Authentication users and
-read/write Firestore. Grant only the permissions needed for those tasks. The
-service handles admin-approved account activation and confirmed full-account
-deletion, including linked loan and account-request records.
+The service account must be able to manage Firebase Authentication users,
+read/write Firestore, and send FCM messages (`roles/firebasecloudmessaging.admin`).
+Grant only the permissions needed for those tasks. The service handles
+admin-approved account activation and confirmed full-account deletion,
+including linked loan and account-request records.
 
 ## Enable mobile notifications without Blaze
 
-The mobile app registers its FCM device token in Firestore. A time-driven
-Google Apps Script poller sends admin-chat replies, loan request and return
-decisions, and loan deadline reminders. The approval service queues Fabii
-notifications for the poller. Firebase Cloud Functions are
-not required for this setup.
+The mobile app registers its FCM device token in Firestore. Admin and Fabii
+chat replies send an FCM push directly through the approval service when the
+message is saved. The Google Apps Script poller remains a retry fallback for
+chat pushes and handles loan request and return decisions and loan deadline
+reminders. Firebase Cloud Functions are not required for this setup.
 
 ### Configure the Apps Script poller
 
@@ -232,8 +226,10 @@ not required for this setup.
    `installLendyNotificationPoller` once. It creates a five-minute trigger and
    records a start cursor so old chat and loan updates are not replayed.
 6. Deploy the latest `approval-server/` changes to the existing Render
-   service. Fabii replies are queued there for the poller. The Render service can still sleep between API requests; a request
-   wakes it, and its notification is sent on a later Apps Script poll.
+   service. It sends Admin and Fabii chat pushes as part of the chat request;
+   failed or pending chat pushes remain eligible for Apps Script retry. The
+   Render service can sleep between requests, so its wake-up can still add
+   delay to the first reply after inactivity.
 
 The root `firestore.indexes.json` config preserves the normal collection
 indexes and adds collection-group indexes for `notifications.pushStatus` and
@@ -241,12 +237,14 @@ indexes and adds collection-group indexes for `notifications.pushStatus` and
 chat scan. Deploy Firestore indexes after changing that configuration; the
 poller cannot run its other notification scans until the indexes are ready.
 
-The poller checks every five minutes, so chat and loan-status pushes can be
-delayed by several minutes. It checks due dates on the first poll after the
-Manila date changes; this is best-effort, not an exact-midnight guarantee.
-Apps Script and FCM may also delay execution or delivery. FCM requires internet
-access; an offline device may receive a push after it reconnects. Android's
-system force-stop prevents delivery until the app is opened again.
+The poller checks every five minutes, so loan-status pushes and fallback chat
+pushes can be delayed by several minutes. Normal Admin/Fabii chat pushes are
+sent directly through Render after the message is saved. The poller checks due
+dates on the first poll after the Manila date changes; this is best-effort, not
+an exact-midnight guarantee. Apps Script and FCM may also delay execution or
+delivery. FCM requires internet access; an offline device may receive a push
+after it reconnects. Android's system force-stop prevents delivery until the
+app is opened again.
 Apps Script quotas still apply; a personal Google account currently has a
 90-minute daily limit for time-driven trigger runtime.
 
