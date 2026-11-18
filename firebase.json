@@ -1,6 +1,7 @@
 {
   "firestore": {
-    "rules": "admin/firestore.rules"
+    "rules": "admin/firestore.rules",
+    "indexes": "firestore.indexes.json"
   },
   "functions": {
     "source": "functions",

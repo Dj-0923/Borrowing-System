@@ -35,7 +35,7 @@ remain on the Spark plan.
 
    ```powershell
    firebase login
-   firebase deploy --only firestore:rules --project borrowing-system-lendy
+   firebase deploy --only firestore:rules,firestore:indexes --project borrowing-system-lendy
    ```
 
    The admin dashboard stores notification read state and received timestamps
@@ -235,6 +235,11 @@ not required for this setup.
    service. Account decisions and Fabii replies are queued there for the
    poller. The Render service can still sleep between API requests; a request
    wakes it, and its notification is sent on a later Apps Script poll.
+
+The root `firestore.indexes.json` config includes the collection-group
+`notifications.pushStatus` index used by the poller's pending-delivery retry.
+Deploy Firestore indexes after changing that configuration; the poller cannot
+run its other notification scans until the index is ready.
 
 The poller checks every five minutes, so chat and loan-status pushes can be
 delayed by several minutes. It checks due dates on the first poll after the
