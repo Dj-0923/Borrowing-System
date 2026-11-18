@@ -7,7 +7,8 @@ does the service create the sign-in account, generate a temporary password,
 and email it to the requester. The approval is rolled back if the email cannot
 be sent. Email is sent by a small Google Apps Script web app using Gmail over
 HTTPS, so the Render Free service does not need SMTP access. Push notifications
-are handled separately by the Firebase Cloud Functions described below.
+are sent by a separate Google Apps Script poller so the Firebase project can
+remain on the Spark plan.
 
 ## Configure Firebase
 
@@ -193,41 +194,62 @@ read/write Firestore. Grant only the permissions needed for those tasks. The
 service handles admin-approved account activation and confirmed full-account
 deletion, including linked loan and account-request records.
 
-## Enable mobile notifications
+## Enable mobile notifications without Blaze
 
-The mobile app registers its FCM device token in Firestore. The functions in
-`functions/` send admin-chat replies, item request and return decisions, and
-return deadline reminders. The account approval service also sends account
-request decisions and Fabii replies. Deploying these functions is required for
-server-generated alerts to arrive while the app is closed:
+The mobile app registers its FCM device token in Firestore. A time-driven
+Google Apps Script poller sends admin-chat replies, loan request and return
+decisions, and return deadline reminders. The approval service queues account
+request and Fabii notifications for the poller. Firebase Cloud Functions are
+not required for this setup.
 
-1. Enable billing for the Firebase project (the Blaze plan is required for
-   Cloud Functions and the scheduled reminder job). Review Firebase pricing
-   and set a budget alert before enabling billing; usage may incur charges.
-2. From the repository root, install the Functions dependencies and deploy:
+### Configure the Apps Script poller
 
-   ```powershell
-   cd functions
-   npm install
-   cd ..
-   firebase deploy --only functions --project borrowing-system-lendy
-   ```
-3. Deploy the latest `approval-server/` changes to the existing Render service.
-   That service sends the account-request and Fabii reply notifications.
-4. Allow notifications for Lendy when prompted and in the device's system
-   settings. Submit an account request or sign in with an approved account
-   while online so the app can register the device token.
-5. The scheduled job runs at 12:00 AM Asia/Manila for the due-date alert and
-   sends the one-day-before reminder at the same time the day before. Cloud
-   Scheduler delivery may be delayed slightly by the platform. FCM requires
-   internet access; a device that is offline can receive a push after it
-   reconnects. Android's system force-stop prevents delivery until the app is
-   opened again.
+1. Create a **separate** Apps Script project at
+   [script.google.com](https://script.google.com/). Do not replace the Gmail
+   sender project; the notification poller uses a different purpose and
+   permissions.
+2. Copy `approval-server/push-notifications.gs` into the new project's
+   `Code.gs`. In **Project Settings**, enable **Show "appsscript.json"
+   manifest file in editor**, then replace the manifest contents with
+   `approval-server/push-notifications.appsscript.json`.
+3. Keep the script's time zone set to `Asia/Manila`. In **Project Settings →
+   Script Properties**, add:
+
+   | Property | Value |
+   | --- | --- |
+   | `FIREBASE_PROJECT_ID` | `borrowing-system-lendy` |
+
+4. In Google Cloud Console for `borrowing-system-lendy`, enable the **Cloud
+   Firestore API** and **Firebase Cloud Messaging API**. The Google account
+   that owns the script and its trigger needs permission to read/write
+   Firestore and send FCM messages. Grant `Cloud Datastore User`
+   (`roles/datastore.user`) and `Firebase Cloud Messaging API Admin`
+   (`roles/firebasecloudmessaging.admin`), unless that account already has an
+   equivalent project role. Keep access to the Apps Script project limited to
+   trusted project owners; it can access borrower records and device tokens.
+5. In Apps Script, select and run `authorizeLendyNotificationAccess` once.
+   Review and accept the requested Google API permissions. Then run
+   `installLendyNotificationPoller` once. It creates a five-minute trigger and
+   records a start cursor so old chat and loan updates are not replayed.
+6. Deploy the latest `approval-server/` changes to the existing Render
+   service. Account decisions and Fabii replies are queued there for the
+   poller. The Render service can still sleep between API requests; a request
+   wakes it, and its notification is sent on a later Apps Script poll.
+
+The poller checks every five minutes, so chat and loan-status pushes can be
+delayed by several minutes. It checks due dates on the first poll after the
+Manila date changes; this is best-effort, not an exact-midnight guarantee.
+Apps Script and FCM may also delay execution or delivery. FCM requires internet
+access; an offline device may receive a push after it reconnects. Android's
+system force-stop prevents delivery until the app is opened again.
+Apps Script quotas still apply; a personal Google account currently has a
+90-minute daily limit for time-driven trigger runtime.
 
 Push alerts are not rendered by the app while it is in the foreground. While
 the app is closed or in the background, Android/iOS displays the FCM
 notification. Account-request decisions can be pushed before sign-in because
-the request flow stores the device token in the request's private credentials.
+the approval service copies the request's device token to a restricted,
+short-lived server-side queue item before removing the request credentials.
 
 ## What users and admins will see
 

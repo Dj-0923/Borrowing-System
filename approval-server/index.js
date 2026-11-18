@@ -1,7 +1,6 @@
 const { initializeApp, cert } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
-const { getMessaging } = require("firebase-admin/messaging");
 const {
   buildBorrowerAssistantResponse,
   borrowerAnswerLanguage,
@@ -511,7 +510,7 @@ async function createAccountRequest(data) {
   return { success: true, requestId, statusToken };
 }
 
-async function sendAccountRequestPush(requestRef, title, body) {
+async function sendAccountRequestPush(requestRef, eventId, type, title, body) {
   const deviceRef = requestRef
     .collection("privateCredentials")
     .doc("push-device");
@@ -519,24 +518,21 @@ async function sendAccountRequestPush(requestRef, title, body) {
   const token = device.data()?.token;
   if (!device.exists || typeof token !== "string" || !token) return;
 
-  try {
-    await getMessaging().send({
-      token,
-      notification: { title, body },
-      android: {
-        priority: "high",
-        notification: { channelId: "lendy_alerts" },
-      },
+  const queueRef = db.collection("pushNotificationQueue").doc(eventId);
+  await db.runTransaction(async (transaction) => {
+    const queuedEvent = await transaction.get(queueRef);
+    if (queuedEvent.exists) return;
+    transaction.create(queueRef, {
+      notificationId: eventId,
+      type,
+      loanId: "",
+      title,
+      message: body,
+      targetToken: token,
+      status: "pending",
+      createdAt: FieldValue.serverTimestamp(),
     });
-  } catch (error) {
-    if (
-      ["messaging/invalid-registration-token", "messaging/registration-token-not-registered"]
-        .includes(error.code)
-    ) {
-      await deviceRef.delete();
-    }
-    throw error;
-  }
+  });
 }
 
 async function sendFabiiReplyNotification(borrowerUid) {
@@ -556,41 +552,11 @@ async function sendFabiiReplyNotification(borrowerUid) {
     title,
     message,
     isRead: false,
+    pushSent: false,
+    pushStatus: "pending",
+    deliverySource: "apps_script",
     timestamp: FieldValue.serverTimestamp(),
   });
-
-  const deviceSnapshots = await accountRef.collection("devices").get();
-  const devices = deviceSnapshots.docs
-    .map((document) => ({ ref: document.ref, token: document.data().token }))
-    .filter((device) => typeof device.token === "string" && device.token);
-  let pushSent = false;
-  for (let offset = 0; offset < devices.length; offset += 500) {
-    const batch = devices.slice(offset, offset + 500);
-    const response = await getMessaging().sendEachForMulticast({
-      tokens: batch.map((device) => device.token),
-      notification: { title, body: message },
-      android: {
-        priority: "high",
-        notification: { channelId: "lendy_alerts" },
-      },
-    });
-    pushSent = pushSent || response.successCount > 0;
-    await Promise.all(
-      response.responses.map((result, index) => {
-        if (
-          result.success ||
-          ![
-            "messaging/invalid-registration-token",
-            "messaging/registration-token-not-registered",
-          ].includes(result.error?.code)
-        ) {
-          return Promise.resolve();
-        }
-        return batch[index].ref.delete();
-      }),
-    );
-  }
-  await notificationRef.update({ pushSent });
 }
 
 async function getAccountRequestStatus(data) {
@@ -919,6 +885,8 @@ async function approveRequest(data) {
   try {
     await sendAccountRequestPush(
       requestRef,
+      requestId + "_approved",
+      "account_approved",
       "Account approved",
       "Your Lendy account request was approved. Sign in with the temporary password sent to your email.",
     );
@@ -1012,6 +980,8 @@ async function rejectAccountRequest(data) {
   try {
     await sendAccountRequestPush(
       requestRef,
+      requestId + "_rejected",
+      "account_rejected",
       "Account request not approved",
       "Your Lendy account request was not approved.",
     );
