@@ -250,10 +250,12 @@ system force-stop prevents delivery until the app is opened again.
 Apps Script quotas still apply; a personal Google account currently has a
 90-minute daily limit for time-driven trigger runtime.
 
-Push alerts are not rendered by the app while it is in the foreground. While
-the app is closed or in the background, Android/iOS displays the FCM
-notification. Account-request decisions are tracked in the app while pending
-and delivered through email after approval; they do not generate push alerts.
+When the app is in the foreground, eligible FCM alerts appear in the phone's
+notification shade unless the user is already viewing the relevant page. When
+the app is in the background or closed, Android/iOS displays the FCM
+notification payload directly. Account-request decisions are tracked in the
+app while pending and delivered through email after approval; they do not
+generate push alerts.
 
 ## What users and admins will see
 
