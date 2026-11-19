@@ -85,6 +85,8 @@
     messages: '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
     qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M14 21h3"/><path d="M21 14v3"/><path d="M21 21h.01"/>',
     pencil: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
+    check: '<path d="m5 12 4 4L19 6"/>',
+    shield: '<path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3Z"/><path d="m9 12 2 2 4-4"/>',
     userplus: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>',
     users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
     chevronleft: '<path d="m15 18-6-6 6-6"/>',
@@ -492,7 +494,17 @@
   var LABEL = { approved: 'Approved', overdue: 'Overdue', pending: 'Pending', return_pending: 'Return verification', returned: 'Returned', rejected: 'Rejected',
     available: 'Available', borrowed: 'Borrowed', maintenance: 'Maintenance', active: 'Active', revoked: 'Revoked',
     disabled: 'Disabled', borrowing: 'Borrowing' };
-  var pill = function (st) { return '<span class="pill pill-' + st + '">' + LABEL[st] + '</span>'; };
+  var pillIcon = function (st) {
+    var name = 'clock';
+    if (['approved', 'available', 'active', 'returned'].indexOf(st) !== -1) name = 'check';
+    else if (['borrowed', 'borrowing'].indexOf(st) !== -1) name = 'shield';
+    else if (['overdue', 'maintenance', 'rejected', 'revoked', 'disabled'].indexOf(st) !== -1) name = 'alert';
+    else if (st === 'return_pending') name = 'undo';
+    return '<span class="pill-icon">' + icon(name, 'w-2.5 h-2.5') + '</span>';
+  };
+  var pill = function (st) {
+    return '<span class="pill pill-' + st + '">' + pillIcon(st) + LABEL[st] + '</span>';
+  };
 
   function pageHeader(title, sub, actions) {
     return '<div class="flex flex-wrap items-end justify-between gap-4">' +
