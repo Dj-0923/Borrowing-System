@@ -24,22 +24,20 @@
     }
   };
 </script>
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=admin-login-3">
 </head>
-<body class="relative min-h-screen" style="background:var(--cream)">
-
-<!-- Decorative image band behind the sign-in form. -->
-<div class="absolute inset-x-0 top-0 h-[340px] sm:h-[390px] overflow-hidden" style="background:linear-gradient(160deg,var(--side-from),var(--side-to))" aria-hidden="true">
-  <img src="login-background.png" alt="" class="absolute inset-0 h-full w-full object-cover object-center opacity-50">
-</div>
-
-<div class="relative z-10 min-h-screen flex items-start justify-center px-4 pt-12 sm:pt-16 pb-16">
-  <div id="app" class="w-full max-w-[520px]"></div>
-</div>
+<body class="login-page">
+<main class="login-shell">
+  <section class="login-welcome" aria-labelledby="login-welcome-title">
+    <h1 id="login-welcome-title">Welcome Back,<span class="login-admin">Admin!</span></h1>
+    <p>Sign in to manage your platform and keep things running smoothly.</p>
+  </section>
+  <div id="app" class="login-card-slot"></div>
+</main>
 
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
 <script src="firebase-config.js"></script>
-<script src="login.js"></script>
+<script src="login.js?v=admin-login-3"></script>
 </body>
 </html>

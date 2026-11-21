@@ -547,7 +547,7 @@
       ['dashboard', 'Dashboard', 'chart', 0],
       ['approvals', 'Approval queue', 'filecheck', s.pending],
       ['return-verification', 'Return verification', 'inbox', s.returnPending],
-      ['requests', 'Requests', 'userplus', pendingRequests().length],
+      ['requests', 'Account Request', 'userplus', pendingRequests().length],
       ['inventory', 'Inventory', 'archive', 0],
       ['users', 'Users', 'users', 0],
       ['messages', 'Messages', 'messages', unreadChatCount()],
@@ -779,7 +779,7 @@
       list.map(function (r) {
         return '<div class="grid ' + C + ' gap-3 px-4 py-3.5 items-center text-[13px] border-t border-line">' +
           '<span class="truncate font-medium">' + esc(r.name) +
-          (r.college ? '<span class="block text-[11px] text-muted">' + esc(r.college) + '</span>' : '') + '</span>' +
+          (r.college || r.course ? '<span class="block text-[11px] text-muted">' + esc(collegeShortcut(r.college || r.course)) + '</span>' : '') + '</span>' +
           '<span>' + rolePill(r.role) + '</span>' +
           '<span class="truncate text-muted">' + esc(r.email) +
           (r.idNumber ? '<span class="block text-[11px]">ID: ' + esc(r.idNumber) + '</span>' : '') + '</span>' +
@@ -808,7 +808,46 @@
           '<button class="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-tint text-muted" data-action="open-account" data-id="' + a.id + '" aria-label="Manage ' + esc(a.name) + '">\u22ee</button></div>';
       }).join('') + '</div></div>';
   }
-  var COURSES = ['BS Computer Science', 'BS Education', 'BS Engineering', 'BS Information Technology', 'BS Multimedia Arts'];
+  var COURSE_SHORTCUTS = [
+    { short: 'BSIT', full: 'BS Information Technology' },
+    { short: 'BSCS', full: 'BS Computer Science' },
+    { short: 'BSCRIM', full: 'BS Criminology' },
+    { short: 'BSN', full: 'BS Nursing' },
+    { short: 'BS Psychology', full: 'BS Psychology' },
+    { short: 'BSA', full: 'BS Accountancy' },
+    { short: 'BSCE', full: 'BS Civil Engineering' },
+    { short: 'BEEd', full: 'Bachelor of Elementary Education' },
+    { short: 'BSEd', full: 'Bachelor of Secondary Education' },
+    { short: 'BSHM', full: 'BS Hospitality Management' }
+  ];
+  var FACULTY_COLLEGE_SHORTCUTS = [
+    { short: 'CITE', full: 'College of Information and Technology Education' },
+    { short: 'CCJE', full: 'College of Criminal Justice Education' },
+    { short: 'COHS', full: 'College of Health Sciences' },
+    { short: 'CBMA', full: 'College of Business Management and Accountancy' },
+    { short: 'CEA', full: 'College of Engineering and Architecture' },
+    { short: 'CTE', full: 'College of Teacher Education' },
+    { short: 'CHTM', full: 'College of Hospitality and Tourism Management' },
+    { short: 'CHS', full: 'College of Human Sciences' }
+  ];
+  var COLLEGE_SHORTCUTS = COURSE_SHORTCUTS.concat(FACULTY_COLLEGE_SHORTCUTS);
+  function collegeShortcut(value) {
+    var text = typeof value === 'string' ? value.trim() : '';
+    if (!text) return '';
+    var normalized = text.toLowerCase();
+    for (var i = 0; i < COLLEGE_SHORTCUTS.length; i++) {
+      var option = COLLEGE_SHORTCUTS[i];
+      if (normalized === option.short.toLowerCase() ||
+          normalized === option.full.toLowerCase() ||
+          normalized === (option.full + ' (' + option.short + ')').toLowerCase()) {
+        return option.short;
+      }
+    }
+    return text;
+  }
+  var COURSES = COURSE_SHORTCUTS.concat(FACULTY_COLLEGE_SHORTCUTS).map(function (option) {
+    return option.short;
+  });
   function roleToggle(key, label, active) {
     return '<button data-action="users-role" data-value="' + key + '" aria-pressed="' + active + '" class="px-4 py-2 rounded-xl text-sm font-semibold border ' +
       (active ? 'bg-[color:var(--btn-bg)] text-white border-transparent' : 'bg-card text-ink border-line hover:bg-tint') + '">' + label + '</button>';
@@ -824,10 +863,10 @@
     ];
     var rows = accounts.filter(function (a) {
       return (roleFilter === 'all' || a.role === roleFilter) &&
-        (course === 'all' || a.course === course) &&
+        (course === 'all' || collegeShortcut(a.course || a.college) === course) &&
         (!q || (a.name + ' ' + a.email).toLowerCase().indexOf(q) !== -1);
     }).sort(function (a, b) { return a.name.localeCompare(b.name); });
-    var courseOptions = '<option value="all">All courses</option>' + COURSES.map(function (c) {
+    var courseOptions = '<option value="all">All courses / colleges</option>' + COURSES.map(function (c) {
       return '<option value="' + esc(c) + '"' + (course === c ? ' selected' : '') + '>' + esc(c) + '</option>';
     }).join('');
 
@@ -844,7 +883,7 @@
             userAvatar(a, 'w-9 h-9', 'text-xs') +
             '<span class="min-w-0"><span class="block font-medium truncate">' + esc(a.name) + '</span><span class="block text-[11px] text-muted truncate">' + esc(a.email) + '</span></span></span>' +
             '<span>' + rolePill(a.role) + '</span>' +
-            '<span class="truncate text-muted">' + esc(a.course || '\u2014') + '</span>' +
+            '<span class="truncate text-muted">' + esc(collegeShortcut(a.course || a.college) || '\u2014') + '</span>' +
             '<span class="tnum">' + summary.itemsOut + '</span>' +
             '<span>' + pill(st) + '</span>' +
             '<span class="flex items-start lg:items-center justify-end gap-2" data-stop-row>' +
@@ -1118,12 +1157,25 @@
           '<p class="mt-4 font-semibold text-base">' + esc(selected.name || 'User') + '</p>' +
           '<p class="mt-6 text-sm text-muted">This is the start of the conversation</p></div>';
       var disabled = selected.status === 'revoked';
+      var selectedCollege = collegeShortcut(selected.course || selected.college);
+      var selectedRole = ROLE_LABEL[selected.role] || 'User';
       conversation =
         '<div class="flex flex-1 min-h-0 flex-col">' +
-        '<div class="border-b border-line px-5 py-4 flex items-center gap-3">' +
+        '<div class="border-b border-line px-4 sm:px-5 py-3 sm:py-4 flex items-center gap-3">' +
+        '<button type="button" data-action="back-chat-list" class="md:hidden shrink-0 w-9 h-9 rounded-lg flex items-center justify-center hover:bg-tint" aria-label="Back to users">' +
+        icon('chevronleft', 'w-5 h-5') + '</button>' +
         userAvatar(selected, 'w-10 h-10', 'text-sm') +
         '<div class="min-w-0"><p class="font-semibold truncate">' + esc(selected.name || 'User') + '</p>' +
-        '<p class="text-xs text-muted truncate">' + esc(selected.email || '') + '</p></div></div>' +
+        '<p class="hidden md:block text-xs text-muted truncate">' + esc(selected.email || '') + '</p>' +
+        '<p class="md:hidden text-[11px] text-muted truncate">' +
+        esc([selectedCollege, selectedRole].filter(Boolean).join(' · ')) +
+        '</p></div>' +
+        '<details class="user-actions-mobile shrink-0 ml-auto" data-stop-row>' +
+        '<summary aria-label="Conversation actions" title="Conversation actions">\u22ee</summary>' +
+        '<div class="user-actions-menu">' +
+        '<button type="button" data-action="open-user" data-id="' + esc(selected.id) + '">View profile</button>' +
+        '<button type="button" class="user-actions-delete" data-action="delete-conversation" data-id="' + esc(selected.id) + '">Delete conversation</button>' +
+        '</div></details></div>' +
         (state.chatError ? '<p class="px-5 py-3 text-sm text-red-600">' + esc(state.chatError) + '</p>' : '') +
         '<div id="chat-message-list" class="flex-1 overflow-y-auto p-5">' + bubbles + '</div>' +
         (disabled
@@ -1135,7 +1187,9 @@
         '</div>';
     }
 
-    return pageHeader('Messages', 'Private conversations between you and your users.') +
+    return '<div class="md:px-8">' +
+      pageHeader('Messages', 'Private conversations between you and your users.') +
+      '</div>' +
       (chatListError
         ? '<div class="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">Could not load conversations: ' +
           esc(chatListError.message || 'Check the Firestore chat read rules for this admin account.') +
@@ -1146,12 +1200,14 @@
           esc(chatReadError.message || 'Check the admin chat read metadata rules.') +
           '</div>'
         : '') +
-      '<div class="mt-7 grid min-h-0 flex-1 grid-rows-[minmax(0,0.65fr)_minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)] lg:grid-rows-1">' +
-      '<section class="flex min-h-0 flex-col rounded-2xl border border-line bg-card shadow-soft overflow-hidden">' +
-      '<div class="border-b border-line p-4"><h2 class="font-display font-bold text-lg">Users</h2>' +
-      '<div class="mt-3">' + searchBox('messages', 'Search name or email') + '</div></div>' +
+      '<div class="mt-7 grid min-h-0 flex-1 grid-rows-1 gap-4 md:grid-cols-[minmax(250px,40%)_minmax(0,1fr)] lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)] lg:grid-rows-1">' +
+      '<section class="' + (selected ? 'hidden md:flex' : 'flex') + ' min-h-0 flex-col rounded-2xl border border-line bg-card shadow-soft overflow-hidden">' +
+      '<div class="border-b border-line p-4">' +
+      '<h2 class="hidden lg:block font-display font-bold text-lg">Users</h2>' +
+      '<div class="mt-3">' + searchBox('messages', 'Search name or email') + '</div>' +
+      '<h2 class="mt-4 md:mt-3 lg:hidden font-display font-bold text-lg">Users</h2></div>' +
       '<div class="flex-1 min-h-0 overflow-y-auto">' + userList + '</div></section>' +
-      '<section class="flex min-h-0 flex-col rounded-2xl border border-line bg-card shadow-soft overflow-hidden">' +
+      '<section class="' + (selected ? 'flex' : 'hidden md:flex') + ' min-h-0 flex-col rounded-2xl border border-line bg-card shadow-soft overflow-hidden">' +
       conversation + '</section></div>';
   }
 
@@ -1163,7 +1219,7 @@
       return '<button data-action="requests-tab" data-tab="' + key + '" aria-pressed="' + on + '" class="px-4 py-2 rounded-xl text-sm font-semibold ' +
         (on ? 'bg-card shadow-soft' : 'text-muted hover:text-ink') + '">' + label + ' (' + count + ')</button>';
     };
-    return pageHeader('Requests & accounts', 'Review access requests and manage who can sign in.') +
+    return pageHeader('Account Request', 'Review account requests and manage who can sign in.') +
       '<div class="mt-8 inline-flex gap-1 p-1 rounded-2xl" style="background:var(--bar-track)">' +
       tabBtn('pending', 'Pending', pendingCount) + tabBtn('accounts', 'Accounts', accountsCount) + '</div>' +
       '<div class="mt-5">' + (tab === 'accounts' ? accountsTab() : pendingTab()) + '</div>';
@@ -1363,11 +1419,14 @@
     var mainLayoutClass = state.view === 'messages'
       ? 'flex min-h-0 flex-1 flex-col overflow-hidden pb-6'
       : 'pb-28';
+    var mainSpacingClass = state.view === 'messages'
+      ? 'px-5 sm:px-8 md:px-0 lg:px-12 xl:px-16 pt-8 lg:pt-14'
+      : 'px-5 sm:px-8 lg:px-12 xl:px-16 pt-8 lg:pt-14';
     app.innerHTML =
       (state.sidebarOpen ? '<div data-action="toggle-sidebar" class="fixed inset-0 z-30 bg-black/40 lg:hidden"></div>' : '') +
       sidebar() +
       '<div class="lg:pl-[266px] ' + pageLayoutClass + '">' + mobileBar() +
-      '<main class="' + (changed ? 'view-enter ' : '') + (animateChart ? 'chart-enter ' : '') + 'px-5 sm:px-8 lg:px-12 xl:px-16 pt-8 lg:pt-14 ' + mainLayoutClass + ' max-w-[2000px]">' + VIEWS[state.view]() + '</main></div>';
+      '<main class="' + (changed ? 'view-enter ' : '') + (animateChart ? 'chart-enter ' : '') + mainSpacingClass + ' ' + mainLayoutClass + ' max-w-[2000px]">' + VIEWS[state.view]() + '</main></div>';
     var chatInput = app.querySelector('[data-chat-input]');
     if (chatInput) resizeChatInput(chatInput);
     var chatMessageList = document.getElementById('chat-message-list');
@@ -1789,9 +1848,10 @@
         '<p class="text-sm text-muted mt-3">This account request is no longer awaiting approval.</p>' +
         '<div class="mt-6 flex justify-end"><button class="btn btn-ghost" data-action="close-modal">Close</button></div>';
     }
-    return modalHead('Approve account',
-      'A temporary password will be generated and emailed to ' + esc(request.email) + '.') +
-      '<p class="text-sm text-muted mt-3">The user must change this password after signing in. The password will not be saved in Firestore or shown in the admin dashboard.</p>' +
+    return modalHead(
+      'Approve account',
+      'Are you sure you want to approve this account request?',
+    ) +
       '<form data-form="approve-account" data-request-id="' + esc(request.id) + '" novalidate class="mt-5 grid gap-4">' +
       '<p id="form-error" class="text-sm t-bad min-h-[1.25rem]" role="alert"></p>' +
       '<div class="flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button>' +
@@ -1866,7 +1926,7 @@
         '<span class="text-xs text-muted">' + label + '</span><span class="text-right text-sm font-medium break-words">' + esc(value || '\u2014') + '</span></div>';
     };
     var profile = userAvatar(a, 'w-16 h-16', 'text-lg');
-    var college = a.college || a.course;
+    var college = collegeShortcut(a.college || a.course);
     return '<div class="-m-6 mb-5 px-6 py-4 rounded-t-2xl text-white flex items-center gap-3" style="background:var(--btn-bg)">' +
       '<button data-action="close-modal" class="w-7 h-7 -ml-1 rounded-md flex items-center justify-center hover:bg-white/15" aria-label="Back">' + icon('chevronleft', 'w-5 h-5') + '</button>' +
       '<h2 class="font-display font-bold text-lg truncate">' + esc(a.name) + '</h2></div>' +
@@ -2064,6 +2124,15 @@
         render(); break;
       case 'select-chat':
         selectChatUser(id); break;
+      case 'back-chat-list':
+        if (chatMessagesUnsubscribe) chatMessagesUnsubscribe();
+        chatMessagesUnsubscribe = null;
+        state.chatUserId = null;
+        state.chatMessages = [];
+        state.chatError = null;
+        state.chatDraft = '';
+        render();
+        break;
       case 'delete-conversation':
         requestConversationDeletion(id); break;
       case 'toggle-sidebar': state.sidebarOpen = !state.sidebarOpen; render(); break;

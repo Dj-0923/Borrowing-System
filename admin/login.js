@@ -21,13 +21,13 @@
   }
 
   function badge() {
-  return '<div class="w-28 h-28 mx-auto rounded-full bg-card shadow-lg flex items-center justify-center mb-10">' +
-    '<img src="Lendy.png" alt="Lendy" class="w-16 h-16 object-contain">' +
-    '</div>';
-}
+    return '<div class="w-20 h-20 mx-auto rounded-full bg-white shadow-md flex items-center justify-center mb-14">' +
+      '<img src="Lendy.png" alt="Lendy" class="w-14 h-14 object-contain">' +
+      '</div>';
+  }
 
   function card(inner) {
-    return '<div class="w-full rounded-[32px] bg-card px-8 sm:px-14 pt-12 pb-12" style="box-shadow:0 30px 70px -20px rgba(14,79,68,.45), 0 10px 25px -10px rgba(14,79,68,.3)">' + inner + '</div>';
+    return '<div class="login-card">' + inner + '</div>';
   }
 
   function signinBody() {
