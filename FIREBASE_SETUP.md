@@ -38,6 +38,10 @@ loan-related pushes and retries, so the Firebase project can remain on Spark.
    firebase deploy --only firestore:rules,firestore:indexes --project borrowing-system-lendy
    ```
 
+   Chat images are compressed to at most 400 KB and stored in their Firestore
+   message documents, so image messages remain available on the Spark plan.
+   They count toward Firestore's free storage and usage quotas.
+
    The admin dashboard stores notification read state and received timestamps
    under `meta/{ADMIN_AUTH_UID}/adminNotifications`. The deployed rules restrict
    those records to the matching admin account. User-reported returns enter

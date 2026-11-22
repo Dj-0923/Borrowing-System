@@ -321,7 +321,7 @@ service cloud.firestore {
         function validMessage(senderRole) {
           return request.resource.data.keys().hasOnly([
               'senderId', 'senderName', 'senderRole', 'senderPhoto',
-              'text', 'createdAt'
+              'text', 'imageData', 'createdAt'
             ])
             && request.resource.data.senderId == request.auth.uid
             && request.resource.data.senderName is string
@@ -333,8 +333,21 @@ service cloud.firestore {
                   || (request.resource.data.senderPhoto is string
                     && request.resource.data.senderPhoto.size() <= 700000))))
             && request.resource.data.text is string
-            && request.resource.data.text.size() > 0
             && request.resource.data.text.size() <= 2000
+            && (
+              request.resource.data.text.size() > 0
+              || ('imageData' in request.resource.data)
+            )
+            && (
+              !('imageData' in request.resource.data)
+              || (
+                request.resource.data.imageData is string
+                && request.resource.data.imageData.size() <= 600000
+                && request.resource.data.imageData.matches(
+                  '^data:image/jpeg;base64,[A-Za-z0-9+/]+={0,2}$'
+                )
+              )
+            )
             && request.resource.data.createdAt == request.time;
         }
 

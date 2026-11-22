@@ -1141,12 +1141,25 @@
               ? '<div class="py-2 text-center text-[11px] font-medium text-muted">' + esc(chatDate(message.createdAt)) + '</div>'
               : '';
             previousMessageDate = messageDate;
+            var imageData = typeof message.imageData === 'string' &&
+              message.imageData.length <= 600000 &&
+              /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(message.imageData)
+              ? message.imageData : '';
+            var imageContent = imageData
+              ? '<img src="' + esc(imageData) + '" alt="Chat image" class="max-h-64 max-w-full rounded-xl object-contain">'
+              : '';
+            var messageText = typeof message.text === 'string' ? message.text : '';
+            var textContent = messageText
+              ? '<p class="text-sm whitespace-pre-wrap break-words">' + esc(messageText) + '</p>'
+              : '';
             var messageContent = '<div class="flex flex-col ' + (mine ? 'items-end' : 'items-start') + ' mb-1">' +
               '<p class="mb-1 px-2 text-[10px] text-muted">' +
               (mine ? 'Admin · ' : esc(selected.name || 'User') + ' · ') + esc(chatTime(message.createdAt)) +
               '</p><div class="max-w-[85%] rounded-2xl px-4 py-2.5 ' +
               (mine ? 'bg-[color:var(--btn-bg)] text-white' : 'bg-tint text-ink') + '">' +
-              '<p class="text-sm whitespace-pre-wrap break-words">' + esc(message.text) + '</p></div></div>';
+              imageContent + textContent +
+              (!imageContent && !textContent ? '<p class="text-sm text-muted">Image unavailable</p>' : '') +
+              '</div></div>';
             return dateDivider + (mine
               ? '<div class="flex justify-end">' + messageContent + '</div>'
               : '<div class="flex items-end gap-2">' +
