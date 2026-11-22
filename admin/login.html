@@ -24,9 +24,59 @@
     }
   };
 </script>
-<link rel="stylesheet" href="styles.css?v=admin-login-3">
+<link rel="stylesheet" href="styles.css?v=admin-login-4">
 </head>
 <body class="login-page">
+<div class="login-bg" aria-hidden="true"></div>
+<svg class="login-waves" viewBox="0 0 1440 1024" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+  <defs>
+    <linearGradient id="login-wave-light" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#dcf8f4"/>
+      <stop offset=".25" stop-color="#bdfaf0"/>
+      <stop offset=".45" stop-color="#99ffee"/>
+      <stop offset="1" stop-color="#7df0de"/>
+    </linearGradient>
+    <linearGradient id="login-wave-turquoise" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6aeed8" stop-opacity="0"/>
+      <stop offset=".08" stop-color="#8ef0e0" stop-opacity=".25"/>
+      <stop offset=".2" stop-color="#6aeed8"/>
+      <stop offset=".35" stop-color="#30e3c8"/>
+      <stop offset=".6" stop-color="#0ad3b4"/>
+      <stop offset="1" stop-color="#08d3b3"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#login-wave-light)" d="
+    M0 577
+    C120 570, 270 580, 335 625
+    C400 670, 430 770, 490 860
+    C540 930, 620 968, 700 972
+    C780 976, 860 945, 1030 926
+    C1180 925, 1330 975, 1440 1008
+    L1440 1024 L0 1024 Z"/>
+  <path fill="url(#login-wave-turquoise)" d="
+    M0 660
+    C60 658, 100 660, 140 662
+    C260 668, 320 700, 360 770
+    C400 845, 430 940, 520 975
+    C590 995, 680 985, 760 965
+    C800 950, 840 940, 880 941
+    C1000 945, 1150 985, 1270 1024
+    L0 1024 Z"/>
+  <path fill="#07897a" d="
+    M0 762
+    C70 755, 180 750, 240 772
+    C290 790, 320 830, 350 880
+    C390 950, 440 985, 520 990
+    L0 1024 Z"/>
+  <path fill="#0e9f8a" d="
+    M0 908
+    C120 835, 200 805, 260 805
+    C300 805, 320 830, 350 880
+    C390 950, 440 985, 520 990
+    C620 995, 700 960, 780 965
+    C900 975, 1000 1000, 1090 1024
+    L0 1024 Z"/>
+</svg>
 <main class="login-shell">
   <section class="login-welcome" aria-labelledby="login-welcome-title">
     <h1 id="login-welcome-title">Welcome Back,<span class="login-admin">Admin!</span></h1>

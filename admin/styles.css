@@ -195,10 +195,53 @@ button:disabled { cursor: not-allowed; }
 
 .login-page {
   min-height: 100vh;
-  background: #fff url("login-waves.png") center / cover no-repeat;
+  position: relative;
+  isolation: isolate;
+  background: #fff;
+}
+.login-bg {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background:
+    radial-gradient(circle at 100% 100%, rgba(170, 228, 222, .75) 0%, rgba(170, 228, 222, 0) 28%),
+    radial-gradient(ellipse 45% 40% at 92% 62%, rgba(200, 214, 214, .95) 0%, rgba(200, 214, 214, 0) 100%),
+    radial-gradient(ellipse 95% 75% at 80% 0%, #c4e4e1 0%, rgba(213, 228, 227, .75) 40%, rgba(255, 255, 255, 0) 78%),
+    linear-gradient(to bottom, rgba(222, 232, 231, .55), rgba(255, 255, 255, 0) 55%),
+    #fff;
+}
+.login-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    140deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(215, 232, 230, .45) 48%,
+    rgba(255, 255, 255, .95) 58%,
+    #fff 59.3%,
+    rgba(143, 218, 211, .95) 61.5%,
+    rgba(168, 218, 213, .9) 68%,
+    rgba(203, 217, 217, .85) 77%,
+    rgba(203, 217, 217, 0) 100%
+  );
+  -webkit-mask-image: linear-gradient(100deg, transparent 52%, #000 76%);
+  mask-image: linear-gradient(100deg, transparent 52%, #000 76%);
+}
+.login-waves {
+  position: absolute;
+  z-index: 0;
+  left: 0;
+  bottom: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 .login-shell {
   box-sizing: border-box;
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 400px) minmax(360px, 396px);
   align-items: center;
