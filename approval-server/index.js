@@ -1244,6 +1244,7 @@ function borrowerCatalogFacts(equipment, activeLoans) {
 async function classifyBorrowerQuestion(question, equipment, activeLoans) {
   const fallback = fallbackBorrowerIntent(question, equipment);
   if (
+    ["greeting", "thanks", "farewell", "help"].includes(fallback.intent) ||
     fallback.intent === "my_profile" ||
     fallback.intent === "maintenance_items"
   ) {

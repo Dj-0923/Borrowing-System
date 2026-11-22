@@ -202,6 +202,43 @@ test("delivery disables a queued notification when its category is off", () => {
   assert.equal(updates[0].pushStatus.stringValue, "disabled");
 });
 
+test("disabled preferences stop return and request alerts before they are created", () => {
+  const { context } = createContext();
+  const requests = [];
+  context.lendyGetDocument_ = () => ({
+    notificationPreferences: {
+      requestUpdatesEnabled: false,
+      returnRemindersEnabled: false,
+    },
+  });
+  context.lendyRequest_ = (...args) => {
+    requests.push(args);
+    return { status: 200 };
+  };
+
+  for (const [type, preferenceKey] of [
+    ["due_reminder", "returnRemindersEnabled"],
+    ["due_today", "returnRemindersEnabled"],
+    ["overdue", "returnRemindersEnabled"],
+    ["returned", "returnRemindersEnabled"],
+    ["return_rejected", "returnRemindersEnabled"],
+    ["approved", "requestUpdatesEnabled"],
+    ["rejected", "requestUpdatesEnabled"],
+  ]) {
+    context.lendyNotifyBorrower_("test", {
+      borrowerUid: "borrower-1",
+      notificationId: `${type}-notification`,
+      title: "Test notification",
+      message: "Test message",
+      type,
+      loanId: "loan-1",
+      preferenceKey,
+    });
+  }
+
+  assert.equal(requests.length, 0);
+});
+
 test("Firestore errors include the API-provided reason", () => {
   const { context } = createContext();
 

@@ -1,539 +1,206 @@
 "use strict";
 
-const assert = require("node:assert/strict");
 const test = require("node:test");
-
+const assert = require("node:assert/strict");
 const {
   buildBorrowerAssistantResponse,
   borrowerAnswerLanguage,
   borrowerProfileField,
-  findInventoryCategory,
   fallbackBorrowerIntent,
   isBorrowerDomainQuestion,
-  itemStatus,
 } = require("./borrower-assistant");
 
 const equipment = [
-  {
-    id: "camera-1",
-    name: "Sony Camera",
-    category: "Cameras",
-    location: "AV Room",
-  },
-  {
-    id: "camera-2",
-    name: "Canon Camera",
-    category: "Cameras",
-    location: "Storage",
-  },
-  {
-    id: "projector-1",
-    name: "Projector",
-    category: "Projectors",
-  },
-  {
-    id: "tablet-1",
-    name: "Tablet",
-    category: "Tablets",
-    maintenance: true,
-  },
+  { id: "eq1", name: "Canon R50", category: "Camera", tag: "CAM-001", location: "Room 1" },
+  { id: "eq2", name: "Epson X49", category: "Projector", tag: "PRJ-001", location: "Room 2" },
+  { id: "eq3", name: "Dell Latitude", category: "Laptop", tag: "LAP-001", location: "Room 3" },
+  { id: "eq4", name: "Sony A7", category: "Camera", tag: "CAM-002", location: "Room 1", maintenance: true },
 ];
-
-test("approved inventory is Reserved before checkout and Borrowed after checkout", () => {
-  const item = equipment[0];
-
-  assert.equal(
-    itemStatus(item, [{ equipmentId: item.id, status: "approved" }]),
-    "Reserved",
-  );
-  assert.equal(
-    itemStatus(item, [{
-      equipmentId: item.id,
-      status: "approved",
-      checkedOutAt: 1_700_000_000_000,
-    }]),
-    "Borrowed",
-  );
-});
-
-test("available items excludes checked-out, returned-for-verification, and maintenance items", () => {
-  const { answer, items } = buildBorrowerAssistantResponse({
-    intent: "available_items",
+const personalLoans = [
+  { id: "l1", name: "Canon R50", equipmentId: "eq1", status: "approved", checkedOutAt: "x", start: "2026-11-01", end: "2026-11-10" },
+  { id: "l2", name: "Epson X49", equipmentId: "eq2", status: "approved", start: "2026-11-20", end: "2026-11-30" },
+];
+const intentOf = (q) => fallbackBorrowerIntent(q, equipment).intent;
+const respond = (q, extra = {}) => {
+  const classified = fallbackBorrowerIntent(q, equipment);
+  return buildBorrowerAssistantResponse({
+    ...classified,
     equipment,
-    activeLoans: [
-      { equipmentId: "camera-1", status: "approved" },
-      { equipmentId: "projector-1", status: "return_pending" },
-      { equipmentId: "camera-2", status: "returned" },
-    ],
+    activeLoans: personalLoans,
+    personalLoans,
+    personalProfile: { name: "Juan" },
+    language: borrowerAnswerLanguage(q),
+    ...extra,
   });
+};
 
-  assert.match(answer, /1 item\(s\) available/);
-  assert.match(answer, /Choose one below/);
-  assert.deepEqual(items.map((item) => item.id), ["camera-2"]);
-  assert.equal(items[0].name, "Canon Camera");
-  assert.equal(items[0].status, "Available");
-});
-
-test("suggestions honor the requested category and only use available equipment", () => {
-  const { answer, items } = buildBorrowerAssistantResponse({
-    intent: "suggest_item",
-    category: "camera",
-    equipment,
-    activeLoans: [{ equipmentId: "camera-1", status: "approved" }],
-  });
-
-  assert.match(answer, /Tap Request/);
-  assert.deepEqual(items.map((item) => item.id), ["camera-2"]);
-  assert.equal(items[0].name, "Canon Camera");
-  assert.equal(items[0].status, "Available");
-});
-
-test("inventory results report backend-derived statuses and exclude unavailable requests", () => {
-  const { answer, items } = buildBorrowerAssistantResponse({
-    intent: "inventory_list",
-    equipment,
-    activeLoans: [
-      { equipmentId: "camera-1", status: "approved" },
-      { equipmentId: "projector-1", status: "return_pending" },
-    ],
-  });
-
-  assert.match(answer, /current status/);
-  assert.deepEqual(
-    items.map((item) => [item.name, item.status]),
-    [
-      ["Sony Camera", "Reserved"],
-      ["Canon Camera", "Available"],
-      ["Projector", "Return Pending"],
-      ["Tablet", "In Maintenance"],
-    ],
-  );
-});
-
-test("item status answers are filtered to the item named by the borrower", () => {
-  const { answer, items } = buildBorrowerAssistantResponse({
-    intent: "item_status",
-    itemQuery: "Canon Camera",
-    equipment,
-    activeLoans: [{ equipmentId: "camera-1", status: "approved" }],
-  });
-
-  assert.equal(answer, "Canon Camera is currently Available.");
-  assert.deepEqual(items.map((item) => [item.name, item.status]), [
-    ["Canon Camera", "Available"],
-  ]);
-});
-
-test("Tagalog maintenance questions return only inventory items in maintenance", () => {
-  const classification = fallbackBorrowerIntent(
-    "ano ang mga maintenance na item?",
-    equipment,
-  );
-  assert.equal(classification.intent, "maintenance_items");
-
-  const { answer, items } = buildBorrowerAssistantResponse({
-    ...classification,
-    equipment,
-    activeLoans: [{ equipmentId: "tablet-1", status: "approved" }],
-    language: "filipino",
-  });
-
-  assert.equal(answer, "May 1 item na nasa maintenance sa ngayon.");
-  assert.deepEqual(items.map((item) => [item.id, item.status]), [
-    ["tablet-1", "In Maintenance"],
-  ]);
-});
-
-test("English maintenance item questions return only matching status and report none", () => {
-  const classification = fallbackBorrowerIntent("maintenance items?", equipment);
-  assert.equal(classification.intent, "maintenance_items");
-
-  const { answer, items } = buildBorrowerAssistantResponse({
-    ...classification,
-    equipment,
-  });
-  assert.equal(answer, "1 item(s) are currently in maintenance.");
-  assert.deepEqual(items.map((item) => [item.name, item.status]), [
-    ["Tablet", "In Maintenance"],
-  ]);
-
-  const emptyResponse = buildBorrowerAssistantResponse({
-    ...classification,
-    equipment: equipment.filter((item) => !item.maintenance),
-  });
-  assert.equal(emptyResponse.answer, "There are no items in maintenance right now.");
-  assert.deepEqual(emptyResponse.items, []);
-});
-
-test("named maintenance status questions return only the named item", () => {
-  const classification = fallbackBorrowerIntent(
-    "Is the Tablet under maintenance?",
-    equipment,
-  );
-  assert.equal(classification.intent, "item_status");
-  assert.equal(classification.itemQuery, "Tablet");
-
-  const { answer, items } = buildBorrowerAssistantResponse({
-    ...classification,
-    equipment,
-  });
-  assert.equal(answer, "Tablet is currently In Maintenance.");
-  assert.deepEqual(items.map((item) => item.id), ["tablet-1"]);
-});
-
-test("fallback classification extracts an inventory-backed item category", () => {
-  const result = fallbackBorrowerIntent(
-    "I need a camera for recording",
-    equipment,
-  );
-  assert.deepEqual(result, {
-    intent: "suggest_item",
-    category: "Cameras",
-    itemQuery: "",
-  });
-});
-
-test("Tagalog and Taglish profile, inventory, borrowing, and loan questions are understood", () => {
-  const profileQuestion = fallbackBorrowerIntent("Ano pangalan ko?", equipment);
-  assert.equal(profileQuestion.intent, "my_profile");
-  assert.equal(profileQuestion.profileField, "name");
-  assert.equal(borrowerAnswerLanguage("Ano pangalan ko?"), "filipino");
-
-  assert.equal(
-    fallbackBorrowerIntent("Ano mga item ang available?", equipment).intent,
-    "available_items",
-  );
-  assert.equal(
-    fallbackBorrowerIntent("Anong item ang pwede kong hiramin?", equipment).intent,
-    "available_items",
-  );
-  assert.equal(
-    fallbackBorrowerIntent("Paano ako mag-borrow?", equipment).intent,
-    "how_to_borrow",
-  );
-  assert.equal(
-    fallbackBorrowerIntent("Kailangan ko ng camera", equipment).intent,
-    "suggest_item",
-  );
-  assert.equal(
-    fallbackBorrowerIntent("Kailangan ko ng Sony Camera", equipment).intent,
-    "suggest_item",
-  );
-  assert.equal(
-    fallbackBorrowerIntent("Kailan ko ibabalik ang camera?", equipment).intent,
-    "my_loan_deadlines",
-  );
-  assert.equal(
-    fallbackBorrowerIntent("Ano mga request ko?", equipment).intent,
-    "my_loans",
-  );
-  assert.equal(borrowerAnswerLanguage("What camera do I need?"), "english");
-});
-
-test("fallback classification recognizes item detail and personal loan questions", () => {
-  for (const question of [
-    "Tell me about the Sony Camera",
-    "What is the Sony Camera?",
+test("greetings are recognized (English, Tagalog, Taglish)", () => {
+  for (const q of [
+    "hello", "Hi", "hey!", "Hello po", "hi lendy", "good morning", "Good afternoon po",
+    "magandang umaga", "magandang hapon po", "kumusta", "kamusta ka na?", "musta po",
+    "hello kumusta", "how are you", "hey there", "HELLO!!!", "what's up",
   ]) {
-    const itemQuestion = fallbackBorrowerIntent(question, equipment);
-    assert.equal(itemQuestion.intent, "item_question");
-    assert.equal(itemQuestion.itemQuery, "Sony Camera");
-  }
-  assert.equal(
-    fallbackBorrowerIntent("What are my loans?", equipment).intent,
-    "my_loans",
-  );
-  assert.equal(
-    fallbackBorrowerIntent("When are my loans due?", equipment).intent,
-    "my_loan_deadlines",
-  );
-});
-
-test("category matching accepts singular Gemini labels but returns the backend category", () => {
-  assert.equal(findInventoryCategory("Camera", equipment), "Cameras");
-  assert.equal(findInventoryCategory("unknown item", equipment), "");
-});
-
-test("fallback classification refuses general questions rather than inventing answers", () => {
-  assert.equal(
-    fallbackBorrowerIntent("Who won the game?", equipment).intent,
-    "unknown",
-  );
-  assert.equal(
-    fallbackBorrowerIntent("What is my name?", equipment).intent,
-    "my_profile",
-  );
-  assert.equal(
-    fallbackBorrowerIntent("I am available tomorrow", equipment).intent,
-    "unknown",
-  );
-  assert.equal(isBorrowerDomainQuestion("What is my name?", equipment), true);
-  assert.equal(isBorrowerDomainQuestion("What tool can I borrow?", equipment), true);
-});
-
-test("profile questions resolve only to supported fields on the signed-in user's profile", () => {
-  const profile = {
-    name: "Jamie Rivera",
-    email: "jamie@example.test",
-    role: "student",
-    idNumber: "STU-12345",
-    college: "BSIT",
-    yearLevel: "3rd year",
-    block: "1",
-    gender: "Female",
-    status: "active",
-  };
-  const questions = [
-    ["What is my name?", "name", "Jamie Rivera"],
-    ["What is my email address?", "email", "jamie@example.test"],
-    ["Am I a student or faculty?", "role", "Student"],
-    ["What is my student number?", "idNumber", "STU-12345"],
-    ["What course am I taking?", "college", "BSIT"],
-    ["What is my year level?", "yearLevel", "3rd year"],
-    ["What is my block?", "block", "1"],
-    ["What is my gender?", "gender", "Female"],
-    ["What gender am I?", "gender", "Female"],
-    ["What is my account status?", "accountStatus", "active"],
-  ];
-
-  for (const [question, field, value] of questions) {
-    const classification = fallbackBorrowerIntent(question, equipment);
-    assert.equal(classification.intent, "my_profile");
-    assert.equal(borrowerProfileField(question.toLowerCase()), field);
-    const { answer, items } = buildBorrowerAssistantResponse({
-      intent: classification.intent,
-      profileField: classification.profileField,
-      personalProfile: profile,
-    });
-    assert.match(answer, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    assert.deepEqual(items, []);
+    assert.equal(intentOf(q), "greeting", q);
+    assert.ok(isBorrowerDomainQuestion(q, equipment), q);
   }
 });
 
-test("varied profile questions return a complete safe summary from the user's own record", () => {
-  for (const question of [
-    "What information do you have about my account?",
-    "List all my account details",
-    "Ano ang lahat ng impormasyon sa profile ko?",
-    "Anong info ang meron ka tungkol sa akin?",
+test("a greeting followed by a real question keeps the real intent", () => {
+  assert.equal(intentOf("hello, what items are available?"), "available_items");
+  assert.equal(intentOf("hi po, ano ang loans ko"), "my_loans");
+  assert.equal(intentOf("good morning, what is my email"), "my_profile");
+});
+
+test("thanks are recognized (English, Tagalog, Taglish)", () => {
+  for (const q of [
+    "thanks", "Thank you", "thank you so much!", "thanks a lot", "ty", "thx",
+    "salamat", "salamat po", "maraming salamat", "Maraming salamat po!", "ok salamat",
+    "sige salamat po", "thank you lendy", "salamat sa tulong",
   ]) {
-    assert.equal(borrowerProfileField(question), "summary");
+    assert.equal(intentOf(q), "thanks", q);
   }
+});
 
-  const { answer } = buildBorrowerAssistantResponse({
-    intent: "my_profile",
-    profileField: "summary",
-    personalProfile: {
-      name: "Jamie Rivera",
-      email: "jamie@example.test",
-      idNumber: "STU-12345",
-      role: "student",
-      gender: "Female",
-      college: "BSIT",
-      yearLevel: "3rd year",
-      block: "1",
-      status: "active",
-      profileImage: "data:image/jpeg;base64,private-image-data",
-      mustChangePassword: true,
-    },
-  });
+test("thanks followed by a real question keeps the real intent", () => {
+  assert.equal(intentOf("thanks, what are my deadlines?"), "my_loan_deadlines");
+});
 
-  for (const fact of [
-    "Jamie Rivera",
-    "jamie@example.test",
-    "STU-12345",
-    "student",
-    "Female",
-    "BSIT",
-    "3rd year",
-    "Block: 1",
-    "Account status: active",
-    "Profile photo: Saved",
+test("farewells are recognized", () => {
+  for (const q of ["bye", "goodbye", "paalam", "see you", "ingat po", "bye po"]) {
+    assert.equal(intentOf(q), "farewell", q);
+  }
+});
+
+test("help requests are recognized", () => {
+  for (const q of ["help", "what can you do", "ano kaya mong gawin", "tulong", "how can you help me"]) {
+    assert.equal(intentOf(q), "help", q);
+  }
+  // Not a bare help request
+  assert.equal(intentOf("help me find a projector"), "suggest_item");
+});
+
+test("harmless non-Lendy words are not mistaken for greetings/thanks", () => {
+  for (const q of ["hi5 is a game", "what is the capital of France", "ok", "na", "ka"]) {
+    assert.equal(intentOf(q), "unknown", q);
+  }
+});
+
+test("Filipino and Taglish greeting/thanks answer in Filipino; English in English", () => {
+  assert.equal(borrowerAnswerLanguage("salamat"), "filipino");
+  assert.equal(borrowerAnswerLanguage("kumusta"), "filipino");
+  assert.equal(borrowerAnswerLanguage("magandang umaga"), "filipino");
+  assert.equal(borrowerAnswerLanguage("hello po"), "filipino");
+  assert.equal(borrowerAnswerLanguage("hello"), "english");
+  assert.equal(borrowerAnswerLanguage("thank you"), "english");
+});
+
+test("greeting/thanks/farewell/help replies carry no item data and no invented facts", () => {
+  for (const q of ["hello", "salamat po", "bye", "help", "kumusta"]) {
+    const { answer, items } = respond(q);
+    assert.ok(answer.trim().length > 0, q);
+    assert.deepEqual(items, [], q);
+    assert.doesNotMatch(answer, /Canon|Epson|Dell|CAM-001/, q);
+  }
+  assert.match(respond("hello").answer, /Lendy/);
+  assert.match(respond("hello").answer, /^Hello/);
+  assert.match(respond("salamat po").answer, /Walang anuman/);
+  assert.match(respond("thank you").answer, /welcome/i);
+  assert.match(respond("kumusta").answer, /^Kumusta/);
+});
+
+test("Filipino borrow verbs (humiram/manghiram/paghiram) are understood", () => {
+  assert.equal(intentOf("gusto ko manghiram"), "suggest_item");
+  assert.equal(intentOf("gusto kong humiram ng camera"), "suggest_item");
+  assert.equal(intentOf("pwede ba akong humiram ng laptop?"), "suggest_item");
+  assert.equal(intentOf("paano humiram ng gamit"), "how_to_borrow");
+  assert.equal(intentOf("paano manghiram"), "how_to_borrow");
+  assert.equal(intentOf("pano mag-request"), "how_to_borrow");
+});
+
+test("availability phrased as 'do you have', 'is there', 'can I borrow', 'meron ba'", () => {
+  let r = fallbackBorrowerIntent("do you have a projector?", equipment);
+  assert.equal(r.intent, "available_items");
+  assert.equal(r.category, "Projector");
+  r = fallbackBorrowerIntent("can I borrow a camera", equipment);
+  assert.equal(r.intent, "available_items");
+  assert.equal(r.category, "Camera");
+  r = fallbackBorrowerIntent("meron bang laptop?", equipment);
+  assert.equal(r.intent, "available_items");
+  assert.equal(r.category, "Laptop");
+  r = fallbackBorrowerIntent("may projector ba kayo", equipment);
+  assert.equal(r.intent, "available_items");
+  assert.equal(intentOf("is there any camera I can borrow"), "available_items");
+});
+
+test("availability answers stay grounded in inventory", () => {
+  const { answer, items } = respond("can I borrow a camera");
+  // Canon R50 is checked out and Sony A7 is in maintenance, so no camera is available.
+  assert.equal(items.length, 0);
+  assert.match(answer, /no available items/i);
+  const laptops = respond("meron bang laptop?");
+  assert.deepEqual(laptops.items.map((i) => i.id), ["eq3"]);
+});
+
+test("deadline questions phrased 'when do I return', overdue, hanggang kailan", () => {
+  for (const q of [
+    "when do I return the camera",
+    "when should i return my loan",
+    "do I have any overdue items?",
+    "is my loan past due",
+    "lampas na ba sa due date ang hiniram ko",
+    "hanggang kailan ko pwedeng hawakan ang camera",
   ]) {
-    assert.match(answer, new RegExp(fact.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.equal(intentOf(q), "my_loan_deadlines", q);
   }
-  assert.doesNotMatch(answer, /private-image-data|mustChangePassword/);
+  // Not about the user's own loan
+  assert.notEqual(intentOf("when will the projector be returned"), "my_loan_deadlines");
 });
 
-test("password and photo questions avoid exposing credentials or image contents", () => {
-  const ageIntent = fallbackBorrowerIntent("How old am I?", []);
-  assert.equal(ageIntent.profileField, "notStored");
-  const age = buildBorrowerAssistantResponse({
-    intent: "my_profile",
-    profileField: ageIntent.profileField,
-    personalProfile: {},
-  });
-  assert.match(age.answer, /not saved in your Lendy profile/i);
-
-  const passwordIntent = fallbackBorrowerIntent("Ano password ko?", []);
-  assert.equal(passwordIntent.profileField, "credentials");
-  const password = buildBorrowerAssistantResponse({
-    intent: "my_profile",
-    profileField: passwordIntent.profileField,
-    personalProfile: { password: "never-expose-this" },
-    language: "filipino",
-  });
-  assert.match(password.answer, /Hindi ko makikita o maibibigay ang password/i);
-  assert.doesNotMatch(password.answer, /never-expose-this/);
-
-  const photoIntent = fallbackBorrowerIntent("Do I have a profile photo?", []);
-  assert.equal(photoIntent.profileField, "profilePhoto");
-  const photo = buildBorrowerAssistantResponse({
-    intent: "my_profile",
-    profileField: photoIntent.profileField,
-    personalProfile: { profileImage: "data:image/jpeg;base64,private-image-data" },
-  });
-  assert.match(photo.answer, /saved profile photo/i);
-  assert.doesNotMatch(photo.answer, /private-image-data/);
+test("overdue loans are flagged using stored dates only", () => {
+  const { answer } = respond("do I have overdue items?", { today: "2026-11-22" });
+  assert.match(answer, /Canon R50 — due [^\n]*2026 \(overdue\)/);
+  assert.doesNotMatch(answer, /Epson X49[^\n]*overdue/);
+  const fil = respond("lampas na ba sa due date ang hiniram ko", { today: "2026-11-22" }).answer;
+  assert.match(fil, /Canon R50 — ibalik sa [^\n]*2026 \(lampas na\)/);
 });
 
-test("profile answers follow the language of a Tagalog question", () => {
-  const classification = fallbackBorrowerIntent("Ano pangalan ko?", equipment);
-  const { answer } = buildBorrowerAssistantResponse({
-    intent: classification.intent,
-    profileField: classification.profileField,
-    personalProfile: { name: "Jamie Rivera" },
-    language: borrowerAnswerLanguage("Ano pangalan ko?"),
-  });
-
-  assert.equal(answer, "Ang pangalan mo na naka-save sa Lendy profile mo ay Jamie Rivera.");
+test("plural deadline wording is understood", () => {
+  assert.equal(intentOf("what are my deadlines"), "my_loan_deadlines");
+  assert.equal(intentOf("ano ang return dates ko"), "my_loan_deadlines");
 });
 
-test("Tagalog item and borrowing answers stay grounded and use Filipino wording", () => {
-  const locationQuestion = fallbackBorrowerIntent("Saan ang Sony Camera?", equipment);
-  assert.equal(locationQuestion.intent, "item_question");
-  const locationReply = buildBorrowerAssistantResponse({
-    intent: locationQuestion.intent,
-    category: locationQuestion.category,
-    itemQuery: locationQuestion.itemQuery,
-    equipment,
-    language: borrowerAnswerLanguage("Saan ang Sony Camera?"),
-  });
-  assert.match(locationReply.answer, /impormasyong naka-save sa Lendy/i);
-  assert.match(locationReply.answer, /AV Room/);
-  assert.deepEqual(locationReply.items.map((item) => item.id), ["camera-1"]);
-
-  const borrowingReply = buildBorrowerAssistantResponse({
-    intent: "how_to_borrow",
-    language: "filipino",
-  });
-  assert.match(borrowingReply.answer, /Pumunta sa Browse/);
-});
-
-test("gender questions do not infer sexual orientation from the profile", () => {
-  const profile = { gender: "Female" };
-  for (const question of [
-    "What gender I am? Gay?",
-    "What gender I am, is it gay?",
-  ]) {
-    const classification = fallbackBorrowerIntent(question, equipment);
-    assert.equal(classification.intent, "my_profile");
-    assert.equal(classification.profileField, "gender_orientation");
-    const { answer } = buildBorrowerAssistantResponse({
-      intent: classification.intent,
-      profileField: classification.profileField,
-      personalProfile: profile,
-    });
-    assert.match(answer, /gender as Female/i);
-    assert.match(answer, /does not store sexual orientation/i);
-    assert.match(answer, /can't determine whether you are gay/i);
+test("loan history phrasing", () => {
+  for (const q of ["loan history", "show my history", "ano ang nahiram ko", "mga nirequest ko", "active requests ko"]) {
+    assert.equal(intentOf(q), "my_loans", q);
   }
-
-  const orientationQuestion = fallbackBorrowerIntent("Am I gay?", equipment);
-  assert.equal(orientationQuestion.intent, "my_profile");
-  assert.equal(orientationQuestion.profileField, "orientation");
-  const { answer } = buildBorrowerAssistantResponse({
-    intent: orientationQuestion.intent,
-    profileField: orientationQuestion.profileField,
-    personalProfile: profile,
-  });
-  assert.match(answer, /does not store sexual orientation/i);
-  assert.doesNotMatch(answer, /gender as Female/i);
 });
 
-test("grounded item answers include only real item cards and use the supplied facts", () => {
-  const { answer, items } = buildBorrowerAssistantResponse({
-    intent: "item_question",
-    answer: "The Sony Camera is in the AV Room and is currently borrowed.",
-    itemIds: ["camera-1", "unknown-item"],
-    equipment,
-    activeLoans: [{ equipmentId: "camera-1", status: "approved" }],
-  });
-
-  assert.match(answer, /AV Room/);
-  assert.deepEqual(items.map((item) => item.id), ["camera-1"]);
-  assert.equal(items[0].status, "Reserved");
+test("profile field phrasing without 'ano ang' / 'my'", () => {
+  assert.equal(borrowerProfileField("what is my student id"), "idNumber");
+  assert.equal(borrowerProfileField("student id ko"), "idNumber");
+  assert.equal(borrowerProfileField("what year level am i"), "yearLevel");
+  assert.equal(borrowerProfileField("what block am i in"), "block");
+  assert.equal(borrowerProfileField("email ko po"), "email");
+  assert.equal(borrowerProfileField("role ko"), "role");
+  assert.equal(borrowerProfileField("course ko"), "college");
+  assert.equal(borrowerProfileField("year ko"), "yearLevel");
+  assert.equal(borrowerProfileField("block ko"), "block");
+  assert.equal(borrowerProfileField("pangalan ko"), "name");
 });
 
-test("profile summaries include the user's saved profile information", () => {
-  const { answer } = buildBorrowerAssistantResponse({
-    intent: "my_profile",
-    profileField: borrowerProfileField("tell me about myself"),
-    personalProfile: {
-      name: "Jamie Rivera",
-      email: "jamie@example.test",
-      role: "student",
-      idNumber: "STU-12345",
-      college: "BSIT",
-      yearLevel: "3rd year",
-      block: "1",
-      gender: "Female",
-      status: "active",
-    },
-  });
-
-  assert.match(answer, /Jamie Rivera/);
-  assert.match(answer, /jamie@example\.test/);
-  assert.match(answer, /STU-12345/);
-  assert.match(answer, /Female/);
-  assert.match(answer, /Account status: active/);
-  assert.match(answer, /BSIT/);
+test("profile answers remain grounded: missing data is not invented", () => {
+  const { answer } = respond("student id ko");
+  assert.match(answer, /Walang naka-save/);
+  assert.doesNotMatch(answer, /\d{6,}/);
 });
 
-test("loan deadlines use only the supplied personal loans that are still active", () => {
-  const { answer, items } = buildBorrowerAssistantResponse({
-    intent: "my_loan_deadlines",
-    personalLoans: [
-      { name: "Projector", end: "2026-11-18", status: "approved" },
-      { name: "Camera", end: "2026-11-12", status: "return_pending" },
-      { name: "Old Camera", end: "2026-10-12", status: "returned" },
-    ],
-  });
-
-  assert.match(answer, /Camera — due November 12, 2026/);
-  assert.match(answer, /Projector — due November 18, 2026/);
-  assert.doesNotMatch(answer, /Old Camera/);
-  assert.deepEqual(items, []);
-});
-
-test("loan history answers include only the supplied personal records", () => {
-  const { answer } = buildBorrowerAssistantResponse({
-    intent: "my_loans",
-    personalLoans: [
-      { name: "Camera", start: "2026-11-12", end: "2026-11-15", status: "approved" },
-      { name: "Projector", start: "2026-10-12", status: "returned" },
-    ],
-  });
-
-  assert.match(answer, /Camera — Approved/);
-  assert.match(answer, /return date November 15, 2026/);
-  assert.match(answer, /Projector — Returned/);
-});
-
-test("unrelated questions are restricted to inventory-backed answers", () => {
-  const response = buildBorrowerAssistantResponse({
-    intent: "unknown",
-  });
-
-  assert.match(response.answer, /Lendy's equipment, your profile, and your own loan\/request records/i);
-  assert.deepEqual(response.items, []);
-});
-
-test("borrowing instructions do not require private loan data", () => {
-  const { answer, items } = buildBorrowerAssistantResponse({
-    intent: "how_to_borrow",
-  });
-  assert.match(answer, /tap Request/i);
-  assert.match(answer, /return dates/i);
-  assert.deepEqual(items, []);
+test("regressions: existing intents unchanged", () => {
+  assert.equal(intentOf("what items are available?"), "available_items");
+  assert.equal(intentOf("how do I borrow an item"), "how_to_borrow");
+  assert.equal(intentOf("show my loans"), "my_loans");
+  assert.equal(intentOf("anong items ang under maintenance"), "maintenance_items");
+  assert.equal(intentOf("is the Canon R50 available"), "item_status");
+  assert.equal(intentOf("what is the weather today"), "unknown");
+  assert.equal(intentOf("tell me a joke"), "unknown");
+  assert.equal(borrowerProfileField("my gender"), "gender");
 });

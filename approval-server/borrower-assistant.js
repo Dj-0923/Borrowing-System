@@ -3,14 +3,163 @@
 const activeLoanStatuses = new Set(["approved", "return_pending"]);
 
 function borrowerAnswerLanguage(question) {
-  return /\b(?:ano|anong|paano|pano|sino|alin|saan|kailan|kelan|ko|ako|akin|mo|mga|pwede|puwede|pwedeng|puwedeng|hiram|hiramin|hihiram|ibalik|kailangan|gusto|hanap|meron|yung|dapat|hindi|ba|pangalan|kasarian|edad)\b/i.test(
+  return /\b(?:ano|anong|paano|pano|sino|alin|saan|kailan|kelan|ko|ako|akin|mo|mga|pwede|puwede|pwedeng|puwedeng|hiram|hiramin|hihiram|ibalik|kailangan|gusto|hanap|meron|mayroon|yung|dapat|hindi|ba|pangalan|kasarian|edad|po|opo|salamat|maraming|kumusta|kamusta|musta|magandang|humiram|manghiram|paghiram|nahiram|naibalik|tulong|ilan|nasaan|lampas|lagpas)\b/i.test(
     question,
   )
     ? "filipino"
     : "english";
 }
 
+const GREETING_PHRASES = [
+  "good (?:morning|afternoon|evening|day|noon)",
+  "magandang (?:umaga|tanghali|hapon|gabi|araw)",
+  "how are (?:you|u)(?: doing)?",
+  "how's it going",
+  "what's up",
+  "whats up",
+  "hello",
+  "hiya",
+  "howdy",
+  "hola",
+  "greetings",
+  "hey",
+  "hi",
+  "yo",
+  "uy",
+  "oy",
+  "sup",
+  "kumusta",
+  "kamusta",
+  "musta",
+];
+const THANKS_PHRASES = [
+  "maraming salamat",
+  "many thanks",
+  "much appreciated",
+  "appreciate it",
+  "thank you",
+  "thank u",
+  "thankyou",
+  "thanks",
+  "thx",
+  "tnx",
+  "ty",
+  "salamat",
+  "cheers",
+];
+const FAREWELL_PHRASES = [
+  "good ?bye",
+  "bye(?: bye)?",
+  "see (?:you|ya)(?: later)?",
+  "take care",
+  "paalam",
+  "ingat",
+];
+const CONVERSATION_FILLERS = [
+  "so much",
+  "very much",
+  "a lot",
+  "sa tulong mo",
+  "sa tulong",
+  "for the help",
+  "for your help",
+  "for helping",
+  "po",
+  "opo",
+  "ho",
+  "lendy",
+  "assistant",
+  "bot",
+  "there",
+  "everyone",
+  "all",
+  "na",
+  "ka",
+  "kayo",
+  "naman",
+  "ba",
+  "ngayon",
+  "today",
+  "much",
+  "marami",
+  "sobra",
+  "talaga",
+  "ha",
+  "ah",
+  "again",
+  "din",
+  "rin",
+  "ok",
+  "okay",
+  "sige",
+  "great",
+  "got it",
+  "kuya",
+  "ate",
+  "sir",
+  "ma'am",
+  "maam",
+];
+const HELP_REQUEST =
+  /^(?:please |pls )?(?:help(?: me)?|tulong|tulungan mo ako|what can you (?:do|help (?:me )?with)|how can you help(?: me)?|how do you work|ano(?: ang)?(?: kaya)?(?: mong gawin|(?: ang)? magagawa mo)|paano mo ako matutulungan)(?: po)?$/;
+
+function normalizeConversationText(question) {
+  return String(question || "")
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[^\p{L}\p{N}'\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripPhrases(text, phrases) {
+  let value = ` ${text} `;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const phrase of phrases) {
+      const next = value.replace(new RegExp(` (?:${phrase})(?= )`, "g"), "");
+      if (next !== value) {
+        value = next;
+        changed = true;
+      }
+    }
+  }
+  return value.trim();
+}
+
+function conversationalIntent(question) {
+  const text = normalizeConversationText(question);
+  if (!text || text.length > 60) return "";
+  if (HELP_REQUEST.test(text)) return "help";
+  const groups = [
+    ["thanks", THANKS_PHRASES],
+    ["farewell", FAREWELL_PHRASES],
+    ["greeting", GREETING_PHRASES],
+  ];
+  const matched = groups.filter(
+    ([, phrases]) => stripPhrases(text, phrases) !== text,
+  );
+  if (matched.length === 0) return "";
+  const everything = groups.flatMap(([, phrases]) => phrases)
+    .concat(CONVERSATION_FILLERS);
+  return stripPhrases(text, everything) === "" ? matched[0][0] : "";
+}
+
+function manilaToday() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 function fallbackBorrowerIntent(question, equipment) {
+  const conversational = conversationalIntent(question);
+  if (conversational) {
+    return { intent: conversational, category: "", itemQuery: "" };
+  }
   const normalized = question.toLowerCase();
   const profileField = borrowerProfileField(normalized);
   if (profileField) {
@@ -31,14 +180,14 @@ function fallbackBorrowerIntent(question, equipment) {
   ) || "";
 
   if (
-    /\b(deadline|due date|return date|when .* due)\b|\b(?:kailan|kelan)\b.{0,40}\b(?:due|deadline|ibalik\w*|ibabalik|return)\b/.test(
+    /\b(deadlines?|due dates?|return dates?|when .* due)\b|\b(?:kailan|kelan)\b.{0,40}\b(?:due|deadline|ibalik\w*|ibabalik|return)\b|\boverdue\b|\bpast due\b|\blampas\b|\blagpas\b|\bhanggang kailan\b|\bwhen\b.{0,20}\b(?:do|should|must|can|will|am) i\b.{0,25}\b(?:return|give back|bring back)\b/.test(
       normalized,
     )
   ) {
     return { intent: "my_loan_deadlines", category: "", itemQuery: "" };
   }
   if (
-    /\b(?:my|mine|me|i)\b.{0,35}\b(?:loans?|requests?|borrowed|borrowing|checked out)\b|\bwhat (?:did|have) i borrow\b|\b(?:mga )?(?:loan|request) ko\b|\b(?:ano|anong) (?:mga )?(?:loan|request)s? ko\b|\bhiniram ko\b/.test(
+    /\b(?:my|mine|me|i)\b.{0,35}\b(?:loans?|requests?|borrowed|borrowing|checked out)\b|\bwhat (?:did|have) i borrow\b|\b(?:mga )?(?:loan|request) ko\b|\b(?:ano|anong) (?:mga )?(?:loan|request)s? ko\b|\bhiniram ko\b|\bnahiram ko\b|\bnirequest ko\b|\b(?:loans?|requests?) ko\b|\b(?:loan|borrow|request) history\b|\bmy history\b|\bhistory ko\b|\b(?:active|current|pending|approved|returned) (?:loans?|requests?)\b/.test(
       normalized,
     )
   ) {
@@ -63,7 +212,7 @@ function fallbackBorrowerIntent(question, equipment) {
   }
   const hasInventoryContext =
     Boolean(mentionedItem || mentionedCategory) ||
-    /\b(equipment|items?|inventory|stock|borrow|request|recommend|suggest|tools?|devices?|hiram|hiramin|hihiram|gamit|kagamitan)\b/.test(
+    /\b(equipment|items?|inventory|stock|borrow|request|recommend|suggest|tools?|devices?|hiram|hiramin|hihiram|humiram|manghiram|manghihiram|paghiram|hiraman|gamit|kagamitan)\b/.test(
       normalized,
     ) ||
     /\b(what|which)\b.{0,30}\bavailable\b|\bwhat can i borrow\b|\b(?:ano|anong|alin)\b.{0,40}\b(?:available|pwedeng hiramin|puwedeng hiramin|hiramin)\b/.test(
@@ -73,7 +222,7 @@ function fallbackBorrowerIntent(question, equipment) {
     return { intent: "unknown", category: "", itemQuery: "" };
   }
   if (
-    /\b(how.*borrow|borrow.*item|how.*request|paano.*(?:hiram|borrow|request)|mag-?borrow|mag-?request)\b/.test(
+    /\b(how.*borrow|borrow.*item|how.*request|(?:paano|pano).*(?:hiram|humiram|manghiram|paghiram|borrow|request)|mag-?borrow|mag-?request)\b/.test(
       normalized,
     )
   ) {
@@ -87,7 +236,7 @@ function fallbackBorrowerIntent(question, equipment) {
     };
   }
   if (
-    /\b(available|in stock|what can i borrow|may .* available|ano .* available)\b|\b(?:pwede|puwede)\b.{0,25}\bhiramin\b/.test(
+    /\b(available|in stock|what can i borrow|may .* available|ano .* available)\b|\b(?:pwede|puwede)\b.{0,25}\bhiramin\b|\b(?:can|may|could) i (?:borrow|request|get)\b|\b(?:do you have|is there|are there)\b|\b(?:meron|mayroon)\s+(?:ba|bang)\b|\bmay\b.{0,30}\bba\b/.test(
       normalized,
     )
   ) {
@@ -98,7 +247,7 @@ function fallbackBorrowerIntent(question, equipment) {
     };
   }
   if (
-    /\b(suggest|recommend|what should i borrow|item for me|i need|looking for|want to borrow|kailangan ko|hanap ko|gusto kong hiramin|gusto ko manghiram|pwede ko bang hiramin|puwede ko bang hiramin)\b/.test(
+    /\b(suggest|recommend|what should i borrow|item for me|i need|looking for|want to borrow|kailangan ko|hanap ko|gusto kong hiramin|gusto ko manghiram|pwede ko bang hiramin|puwede ko bang hiramin|help me (?:find|choose|pick|get)|find me|ipahanap|hanapan mo ako|humanap)\b|\b(?:gusto|nais|balak|plano)\b.{0,20}\b(?:humiram|manghiram|hiramin)\b|\b(?:pwede|puwede)\b.{0,25}\b(?:humiram|manghiram)\b/.test(
       normalized,
     )
   ) {
@@ -145,37 +294,37 @@ function borrowerProfileField(question) {
     return "name";
   }
   if (
-    /\bmy\s+(?:email|email address)\b|\bwhat email (?:do i use|is on my account)\b|\b(?:ano|anong)\s+(?:ang\s+)?email ko\b/.test(
+    /\bmy\s+(?:email|email address)\b|\bwhat email (?:do i use|is on my account)\b|\b(?:ano|anong)\s+(?:ang\s+)?email ko\b|\bemail ko\b/.test(
       normalized,
     )
   ) {
     return "email";
   }
   if (
-    /\bmy\s+role\b|\bam i (?:a )?(?:student|faculty)\b|\b(?:ano|anong)\s+(?:ang\s+)?role ko\b|\bstudent ba ako\b|\bfaculty ba ako\b/.test(
+    /\bmy\s+role\b|\bam i (?:a )?(?:student|faculty)\b|\b(?:ano|anong)\s+(?:ang\s+)?role ko\b|\bstudent ba ako\b|\bfaculty ba ako\b|\brole ko\b/.test(
       normalized,
     )
   ) {
     return "role";
   }
   if (
-    /\bmy\s+(?:id|identification|student)\s+number\b|\b(?:ano|anong)\s+(?:ang\s+)?(?:id|student) number ko\b/.test(
+    /\bmy\s+(?:id|identification|student)\s+number\b|\b(?:ano|anong)\s+(?:ang\s+)?(?:id|student) number ko\b|\bmy\s+(?:student\s+)?id\b|\b(?:student\s+)?(?:id|id number|student number) ko\b/.test(
       normalized,
     )
   ) {
     return "idNumber";
   }
   if (
-    /\bmy\s+(?:college|course|program|major)\b|\bwhat (?:course|program|major|college) am i (?:taking|in|studying)\b|\b(?:ano|anong)\s+(?:ang\s+)?(?:college|course|program|major) ko\b/.test(
+    /\bmy\s+(?:college|course|program|major)\b|\bwhat (?:course|program|major|college) am i (?:taking|in|studying)\b|\b(?:ano|anong)\s+(?:ang\s+)?(?:college|course|program|major) ko\b|\b(?:college|course|program|major) ko\b/.test(
       normalized,
     )
   ) {
     return "college";
   }
-  if (/\bmy\s+year(?:\s+level)?\b|\b(?:ano|anong)\s+(?:ang\s+)?year(?: level)? ko\b/.test(normalized)) {
+  if (/\bmy\s+year(?:\s+level)?\b|\b(?:ano|anong)\s+(?:ang\s+)?year(?: level)? ko\b|\bwhat year(?: level)? am i\b|\byear(?: level)? ko\b/.test(normalized)) {
     return "yearLevel";
   }
-  if (/\bmy\s+(?:block|section)\b|\b(?:ano|anong)\s+(?:ang\s+)?(?:block|section) ko\b/.test(normalized)) {
+  if (/\bmy\s+(?:block|section)\b|\b(?:ano|anong)\s+(?:ang\s+)?(?:block|section) ko\b|\bwhat (?:block|section) am i\b|\b(?:block|section) ko\b/.test(normalized)) {
     return "block";
   }
   const asksAboutGender =
@@ -337,6 +486,13 @@ function matchingItems(equipment, category, itemQuery) {
         .includes(normalizedQuery);
     return categoryMatches && queryMatches;
   });
+}
+
+function isOverdue(end, today) {
+  return typeof end === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(end) &&
+    typeof today === "string" &&
+    end < today;
 }
 
 function formatDueDate(value) {
@@ -546,8 +702,29 @@ function buildBorrowerAssistantAnswer({
   personalProfile = {},
   answer = "",
   language = "english",
+  today = manilaToday(),
 }) {
   const filipino = language === "filipino";
+  if (intent === "greeting") {
+    return filipino
+      ? "Kumusta! Ako ang Lendy assistant. Matutulungan kitang tingnan ang available na equipment, ang mga loan at due date mo, at ang profile mo. Ano ang maitutulong ko?"
+      : "Hello! I'm the Lendy assistant. I can help you check available equipment, see your loans and due dates, and look up your profile. What would you like to know?";
+  }
+  if (intent === "thanks") {
+    return filipino
+      ? "Walang anuman! Sabihan mo lang ako kung may kailangan ka pa tungkol sa equipment o loans mo."
+      : "You're welcome! Let me know if you need anything else about Lendy equipment or your loans.";
+  }
+  if (intent === "farewell") {
+    return filipino
+      ? "Paalam! Balik ka lang kapag kailangan mo ng tulong sa Lendy."
+      : "Goodbye! Come back anytime you need help with Lendy.";
+  }
+  if (intent === "help") {
+    return filipino
+      ? "Matutulungan kitang tingnan ang available na equipment at status ng mga item, ang mga loan at due date mo, at ang mga detalye ng profile mo. Halimbawa: \"Anong camera ang available?\" o \"Kailan ang due ng hiniram ko?\""
+      : "I can help you check available equipment and item status, see your loans and due dates, and look up your profile details. For example: \"What cameras are available?\" or \"When are my items due?\"";
+  }
   if (intent === "my_profile") {
     return buildBorrowerProfileAnswer(profileField, personalProfile, language);
   }
@@ -571,8 +748,8 @@ function buildBorrowerAssistantAnswer({
       .map(
         (loan) =>
           filipino
-            ? `${loan.name || "Unnamed item"} — ibalik sa ${formatDueDate(loan.end)}`
-            : `${loan.name || "Unnamed item"} — due ${formatDueDate(loan.end)}`,
+            ? `${loan.name || "Unnamed item"} — ibalik sa ${formatDueDate(loan.end)}${isOverdue(loan.end, today) ? " (lampas na)" : ""}`
+            : `${loan.name || "Unnamed item"} — due ${formatDueDate(loan.end)}${isOverdue(loan.end, today) ? " (overdue)" : ""}`,
       )
       .join("\n")}`;
   }
