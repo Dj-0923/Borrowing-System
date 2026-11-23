@@ -55,6 +55,7 @@ button:disabled { cursor: not-allowed; }
 
 /* status pills */
 .pill { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid; border-radius: 999px; padding: 4px 10px 4px 6px; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; line-height: 1.5; }
+.pill-icon-only { padding: 4px; }
 .pill-icon { width: 16px; height: 16px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; color: #fff; background: currentColor; flex-shrink: 0; }
 .pill-icon svg { width: 10px; height: 10px; stroke: #fff; }
 .pill-approved .pill-icon, .pill-available .pill-icon, .pill-active .pill-icon, .pill-returned .pill-icon { background: var(--ok-fg); }
@@ -71,6 +72,7 @@ button:disabled { cursor: not-allowed; }
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:disabled { opacity: .45; }
 .btn-sm { padding: .35rem .75rem; font-size: .75rem; border-radius: .625rem; }
+.btn-icon-only { padding: .35rem; }
 .btn-primary { background: var(--btn-bg); color: var(--btn-fg); }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.15); }
 .btn-ghost { background: var(--card); color: var(--ink); border-color: var(--line); }

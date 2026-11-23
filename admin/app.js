@@ -484,9 +484,8 @@
   /* ---------- ui state ---------- */
   var state = {
     view: 'dashboard', lastView: null, lastChartKey: null, chartMode: 'day', chartAnimation: false, sidebarOpen: false, modal: null,
-    filter: { inventory: 'all', history: 'all', usersRole: 'all', usersCourse: 'all' }, q: { inventory: '', history: '', users: '', messages: '' },
-    chatUserId: null, chatMessages: [], chatError: null, chatDraft: '',
-    tab: { requests: 'pending' }
+    filter: { inventory: 'all', inventoryCategory: 'all', history: 'all', usersRole: 'all', usersCourse: 'all' }, q: { inventory: '', history: '', users: '', messages: '' },
+    chatUserId: null, chatMessages: [], chatError: null, chatDraft: ''
   };
   var pendingConfirm = null;
 
@@ -872,31 +871,40 @@
 
     var table;
     if (rows.length) {
-      var C = 'grid-cols-[minmax(0,1.6fr)_110px_minmax(0,1.5fr)_90px_120px_minmax(0,1.6fr)]';
-      table = '<div class="overflow-x-auto rounded-2xl shadow-soft"><div class="min-w-[900px] rounded-2xl border border-line bg-card overflow-hidden">' +
-        '<div class="grid ' + C + ' gap-3 px-4 py-3 bg-head text-[13px] font-bold"><span>User</span><span>Category</span><span>Course / Department</span><span>Items out</span><span>Status</span><span class="text-right">Actions</span></div>' +
+      var C = 'grid-cols-[32px_minmax(64px,1fr)_minmax(0,1fr)_44px_32px_40px] sm:grid-cols-[minmax(0,1.3fr)_minmax(64px,1fr)_minmax(0,1fr)_44px_48px_108px] lg:grid-cols-[minmax(0,1.3fr)_80px_minmax(0,1.3fr)_55px_100px_300px] xl:grid-cols-[minmax(0,1.6fr)_110px_minmax(0,1.5fr)_90px_120px_minmax(0,1.6fr)]';
+      table = '<div class="overflow-x-auto rounded-2xl shadow-soft"><div class="w-full min-w-0 lg:min-w-[900px] rounded-2xl border border-line bg-card overflow-hidden">' +
+        '<div class="grid ' + C + ' gap-x-1 gap-y-3 sm:gap-x-2 lg:gap-x-3 px-1 sm:px-2 lg:px-4 py-3 bg-head text-[10px] sm:text-[12px] lg:text-[13px] font-bold"><span>User</span><span class="text-center">Role</span><span class="truncate text-center">Course / Department</span><span class="text-center sm:text-left">Items out</span><span class="text-right sm:text-left">Status</span><span class="text-right">Actions</span></div>' +
         rows.map(function (a) {
           var st = userStatus(a), summary = userSummary(a);
           var disabled = a.status === 'revoked';
-          return '<div class="grid ' + C + ' gap-3 px-4 py-3.5 items-center text-[13px] border-t border-line hover:bg-tint cursor-pointer" data-action="open-user" data-id="' + a.id + '">' +
-            '<span class="flex items-center gap-3 min-w-0">' +
-            userAvatar(a, 'w-9 h-9', 'text-xs') +
-            '<span class="min-w-0"><span class="block font-medium truncate">' + esc(a.name) + '</span><span class="block text-[11px] text-muted truncate">' + esc(a.email) + '</span></span></span>' +
-            '<span>' + rolePill(a.role) + '</span>' +
-            '<span class="truncate text-muted">' + esc(collegeShortcut(a.course || a.college) || '\u2014') + '</span>' +
-            '<span class="tnum">' + summary.itemsOut + '</span>' +
-            '<span>' + pill(st) + '</span>' +
-            '<span class="flex items-start lg:items-center justify-end gap-2" data-stop-row>' +
+          var accountAction = disabled ? 'restore-account' : 'revoke-account';
+          var accountActionLabel = disabled ? 'Enable account' : 'Disable account';
+          return '<div class="grid ' + C + ' gap-x-1 gap-y-3 sm:gap-x-2 lg:gap-x-3 px-1 sm:px-2 lg:px-4 py-3.5 items-center text-[13px] border-t border-line hover:bg-tint cursor-pointer" data-action="open-user" data-id="' + a.id + '">' +
+            '<span class="flex items-center justify-center sm:justify-start gap-3 min-w-0">' +
+            userAvatar(a, 'w-7 h-7 sm:w-9 sm:h-9', 'text-[10px] sm:text-xs') +
+            '<span class="hidden sm:block min-w-0"><span class="block font-medium truncate">' + esc(a.name) + '</span><span class="block text-[11px] text-muted truncate">' + esc(a.email) + '</span></span></span>' +
+            '<span class="truncate text-center">' + rolePill(a.role) + '</span>' +
+            '<span class="truncate text-center text-muted">' + esc(collegeShortcut(a.course || a.college) || '\u2014') + '</span>' +
+            '<span class="tnum text-center md:text-left">' + summary.itemsOut + '</span>' +
+            '<span class="flex flex-col items-center lg:items-start">' +
+            '<span class="pill pill-' + st + ' pill-icon-only lg:hidden" role="img" aria-label="' + esc(LABEL[st] || st) + '" title="' + esc(LABEL[st] || st) + '">' + pillIcon(st) + '</span>' +
+            '<span class="hidden lg:inline-flex">' + pill(st) + '</span></span>' +
+            '<span class="flex items-center justify-end gap-1 lg:gap-2" data-stop-row>' +
+            '<span class="hidden sm:flex lg:hidden items-center justify-end gap-1">' +
+            '<button class="btn btn-ghost btn-sm btn-icon-only" data-action="reset-user-password" data-id="' + a.id + '" aria-label="Reset password for ' + esc(a.name) + '" title="Reset password">' + icon('key', 'w-3.5 h-3.5') + '</button>' +
+            '<button class="btn ' + (disabled ? 'btn-ghost' : 'btn-danger') + ' btn-sm btn-icon-only" data-action="' + accountAction + '" data-id="' + a.id + '" aria-label="' + accountActionLabel + ' for ' + esc(a.name) + '" title="' + accountActionLabel + '">' + icon(disabled ? 'check' : 'shield', 'w-3.5 h-3.5') + '</button>' +
+            '<button class="btn btn-danger btn-sm btn-icon-only" data-action="delete-user-account" data-id="' + a.id + '" aria-label="Delete account for ' + esc(a.name) + '" title="Delete">' + icon('trash', 'w-3.5 h-3.5') + '</button>' +
+            '</span>' +
             '<span class="user-actions-desktop hidden lg:flex items-center justify-end gap-2">' +
             '<button class="btn btn-ghost btn-sm" data-action="reset-user-password" data-id="' + a.id + '">' + icon('key', 'w-3.5 h-3.5') + 'Reset password</button>' +
-            '<button class="btn ' + (disabled ? 'btn-ghost' : 'btn-danger') + ' btn-sm" data-action="' + (disabled ? 'restore-account' : 'revoke-account') + '" data-id="' + a.id + '">' + (disabled ? 'Enable account' : 'Disable account') + '</button>' +
+            '<button class="btn ' + (disabled ? 'btn-ghost' : 'btn-danger') + ' btn-sm" data-action="' + accountAction + '" data-id="' + a.id + '">' + accountActionLabel + '</button>' +
             '<button class="btn btn-danger btn-sm" data-action="delete-user-account" data-id="' + a.id + '">' + icon('trash', 'w-3.5 h-3.5') + 'Delete</button>' +
             '</span>' +
-            '<details class="user-actions-mobile lg:hidden" data-stop-row data-action="user-actions-toggle">' +
+            '<details class="user-actions-mobile sm:hidden" data-stop-row data-action="user-actions-toggle">' +
             '<summary aria-label="Actions for ' + esc(a.name) + '" title="Actions">\u22ee</summary>' +
             '<div class="user-actions-menu">' +
             '<button data-action="reset-user-password" data-id="' + a.id + '">' + icon('key', 'w-3.5 h-3.5') + 'Reset password</button>' +
-            '<button data-action="' + (disabled ? 'restore-account' : 'revoke-account') + '" data-id="' + a.id + '">' + (disabled ? 'Enable account' : 'Disable account') + '</button>' +
+            '<button data-action="' + accountAction + '" data-id="' + a.id + '">' + accountActionLabel + '</button>' +
             '<button class="user-actions-delete" data-action="delete-user-account" data-id="' + a.id + '">' + icon('trash', 'w-3.5 h-3.5') + 'Delete</button>' +
             '</div></details></span></div>';
         }).join('') + '</div></div>';
@@ -906,7 +914,7 @@
       table = emptyState('search', 'No matching users', 'Try another search or switch the filters back to All.');
     }
 
-    return pageHeader('Users', 'Everyone who can borrow equipment, by category and course.') +
+    return pageHeader('Users', 'Everyone who can borrow equipment, by role and course.') +
       '<div class="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">' +
       cards.map(function (c) {
         return '<div class="rounded-2xl bg-card border border-line shadow-soft px-5 py-5">' +
@@ -1225,34 +1233,45 @@
   }
 
   function viewRequests() {
-    var tab = state.tab.requests;
-    var pendingCount = pendingRequests().length, accountsCount = db.accounts.length;
-    var tabBtn = function (key, label, count) {
-      var on = tab === key;
-      return '<button data-action="requests-tab" data-tab="' + key + '" aria-pressed="' + on + '" class="px-4 py-2 rounded-xl text-sm font-semibold ' +
-        (on ? 'bg-card shadow-soft' : 'text-muted hover:text-ink') + '">' + label + ' (' + count + ')</button>';
-    };
     return pageHeader('Account Request', 'Review account requests and manage who can sign in.') +
-      '<div class="mt-8 inline-flex gap-1 p-1 rounded-2xl" style="background:var(--bar-track)">' +
-      tabBtn('pending', 'Pending', pendingCount) + tabBtn('accounts', 'Accounts', accountsCount) + '</div>' +
-      '<div class="mt-5">' + (tab === 'accounts' ? accountsTab() : pendingTab()) + '</div>';
+      '<div class="mt-8">' + pendingTab() + '</div>';
   }
 
 
   function viewInventory() {
     var q = state.q.inventory.trim().toLowerCase(), f = state.filter.inventory;
+    var categoryFilter = state.filter.inventoryCategory;
     var all = db.equipment;
     var counts = { all: all.length, available: 0, borrowed: 0, maintenance: 0 };
-    all.forEach(function (e) { counts[itemStatus(e)]++; });
+    var categories = [], seenCategories = Object.create(null);
+    all.forEach(function (e) {
+      counts[itemStatus(e)]++;
+      var category = String(e.category || '').trim(), key = normName(category);
+      if (key && !seenCategories[key]) {
+        seenCategories[key] = true;
+        categories.push(category);
+      }
+    });
+    if (categoryFilter !== 'all' && !seenCategories[normName(categoryFilter)]) {
+      categoryFilter = 'all';
+      state.filter.inventoryCategory = 'all';
+    }
     var rows = all.filter(function (e) {
       return (f === 'all' || itemStatus(e) === f) &&
+        (categoryFilter === 'all' || normName(e.category) === normName(categoryFilter)) &&
         (!q || (e.name + ' ' + e.category + ' ' + e.tag).toLowerCase().indexOf(q) !== -1);
     });
-    var C = 'grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,1.7fr)]';
+    var categorySelect = '<select aria-label="Filter by category" data-action="inventory-category" class="field" style="width:auto;min-width:10rem">' +
+      '<option value="all"' + (categoryFilter === 'all' ? ' selected' : '') + '>All categories</option>' +
+      categories.map(function (category) {
+        return '<option value="' + esc(category) + '"' +
+          (normName(category) === normName(categoryFilter) ? ' selected' : '') + '>' + esc(category) + '</option>';
+      }).join('') + '</select>';
+    var C = 'grid-cols-[minmax(0,2fr)_minmax(0,1fr)_36px_48px] sm:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_100px_48px] xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,1.7fr)]';
     var table = '';
     if (rows.length) {
-      table = '<div class="overflow-x-auto rounded-2xl shadow-soft"><div class="min-w-[760px] rounded-2xl border border-line bg-card overflow-hidden">' +
-        '<div class="grid ' + C + ' gap-3 px-4 py-3 bg-head text-[13px] font-bold"><span>Equipment</span><span>Category</span><span>Status</span><span class="text-right">Actions</span></div>' +
+      table = '<div class="overflow-x-auto rounded-2xl shadow-soft"><div class="w-full min-w-0 xl:min-w-[760px] rounded-2xl border border-line bg-card overflow-hidden">' +
+        '<div class="grid ' + C + ' gap-x-1 gap-y-3 sm:gap-x-2 xl:gap-x-3 px-2 sm:px-4 py-3 bg-head text-[10px] sm:text-[13px] font-bold"><span>Equipment</span><span>Category</span><span class="text-right xl:text-left">Status</span><span class="text-right">Actions</span></div>' +
         rows.map(function (e) {
           var st = itemStatus(e), al = activeLoanFor(e.id), sub = '';
           if (al) sub = '<p class="mt-1 text-[11px] ' + (loanStatus(al) === 'overdue' ? 't-bad font-semibold' : 'text-muted') + '">' + esc(borrowerName(al)) + ' · due ' + fmt(al.end) + '</p>';
@@ -1265,10 +1284,11 @@
           else acts = editBtn +
             '<button class="btn btn-ghost btn-sm" data-action="maintenance-off" data-id="' + e.id + '">Back in service</button>' +
             qrBtn + '<button class="btn btn-ghost btn-sm" data-action="delete-item" data-id="' + e.id + '" aria-label="Remove ' + esc(e.name) + '">' + icon('trash', 'w-3.5 h-3.5') + '</button>';
-          return '<div class="grid ' + C + ' gap-3 px-4 py-3 items-center text-[13px] border-t border-line">' +
-            '<span class="flex items-center gap-3 min-w-0">' + mediaTile(e, 'w-9 h-9') + '<span class="min-w-0"><span class="block font-medium truncate">' + esc(e.name) + '</span><span class="block text-[11px] text-muted">' + esc(e.tag) + '</span></span></span>' +
-            '<span class="text-muted">' + esc(e.category) + '</span>' +
-            '<span><span>' + pill(st) + '</span>' + sub + '</span>' +
+          return '<div class="grid ' + C + ' gap-x-1 gap-y-3 sm:gap-x-2 xl:gap-x-3 px-2 sm:px-4 py-3 items-center text-[13px] border-t border-line">' +
+            '<span class="flex items-center gap-1 sm:gap-3 min-w-0">' + mediaTile(e, 'w-6 h-6 sm:w-9 sm:h-9') + '<span class="min-w-0"><span class="block font-medium truncate">' + esc(e.name) + '</span><span class="block text-[11px] text-muted truncate">' + esc(e.tag) + '</span></span></span>' +
+            '<span class="text-muted truncate">' + esc(e.category) + '</span>' +
+            '<span class="min-w-0 max-w-full w-full flex flex-col items-end xl:items-start"><span class="hidden sm:inline-flex">' + pill(st) + '</span>' +
+            '<span class="pill pill-' + st + ' pill-icon-only sm:hidden" role="img" aria-label="' + esc(LABEL[st] || st) + '" title="' + esc(LABEL[st] || st) + '">' + pillIcon(st) + '</span>' + sub + '</span>' +
             '<span class="flex items-center justify-end gap-2">' +
             '<span class="hidden xl:flex items-center justify-end gap-2">' + acts + '</span>' +
             '<details class="user-actions-mobile xl:hidden" data-stop-row data-action="user-actions-toggle">' +
@@ -1284,6 +1304,7 @@
     return pageHeader('Inventory', plural(all.length, 'item') + ' registered. Track what is out, in, and being repaired.',
       '<button class="btn btn-primary" data-action="open-add">' + icon('plus', 'w-4 h-4') + 'Add equipment</button>') +
       '<div class="mt-8 flex flex-wrap items-center gap-2">' + searchBox('inventory', 'Search equipment') +
+      categorySelect +
       chip('All', counts.all, f === 'all', 'inv-filter', 'all') + chip('Available', counts.available, f === 'available', 'inv-filter', 'available') +
       chip('Borrowed', counts.borrowed, f === 'borrowed', 'inv-filter', 'borrowed') + chip('Maintenance', counts.maintenance, f === 'maintenance', 'inv-filter', 'maintenance') +
       '</div><div class="mt-5">' + table + '</div>';
@@ -1829,10 +1850,13 @@
     var imagePreview = item && item.image
       ? '<img src="' + esc(item.image) + '" class="w-full h-full object-cover" alt="">'
       : icon('box', 'w-6 h-6');
+    var imageRequired = !editing || !item.image;
     return modalHead(editing ? 'Edit equipment details' : 'Add equipment',
       editing ? 'Update the equipment information. Its current status will not change.' : 'New items start as available.') +
       '<form data-form="' + (editing ? 'edit-equipment' : 'add') + '"' + (editing ? ' data-id="' + esc(item.id) + '"' : '') + ' novalidate class="mt-5 grid gap-4">' +
       '<div><label class="lbl" for="f-name">Name</label><input id="f-name" name="name" class="field" placeholder="e.g. Sony A7 Camera" maxlength="60" autocomplete="off" value="' + esc(editing ? item.name : '') + '"></div>' +
+      '<div><label class="lbl" for="f-brand">Brand <span class="font-normal">(optional)</span></label><input id="f-brand" name="brand" class="field" placeholder="e.g. Sony, Aula" maxlength="60" autocomplete="off" value="' + esc(editing ? item.brand : '') + '"></div>' +
+      '<div><label class="lbl" for="f-details">Details <span class="font-normal">(optional)</span></label><textarea id="f-details" name="details" class="field" rows="3" maxlength="500" placeholder="Describe the item">' + esc(editing ? item.details : '') + '</textarea></div>' +
       '<div><label class="lbl" for="f-location">Location</label><input id="f-location" name="location" class="field" placeholder="e.g. AV Storage, Room 101" maxlength="80" autocomplete="off" value="' + esc(editing ? item.location : '') + '"></div>' +
       '<div class="grid grid-cols-2 gap-3">' +
       '<div><label class="lbl" for="f-cat">Category</label><select id="f-cat" name="category" class="field">' +
@@ -1840,12 +1864,11 @@
       '<div id="f-custom-category-wrap" class="mt-3"' + (selectedCategory === 'Other' ? '' : ' hidden') + '><label class="lbl" for="f-custom-category">' + (editing ? 'Category name' : 'New category') + '</label>' +
       '<input id="f-custom-category" name="customCategory" class="field" placeholder="Enter category name" maxlength="40" autocomplete="off" value="' + esc(editing && !knownCategory ? item.category : '') + '"></div></div>' +
       '<div><label class="lbl" for="f-tag">Asset tag <span class="font-normal">(optional)</span></label><input id="f-tag" name="tag" class="field" placeholder="Auto-generated" maxlength="16" autocomplete="off" value="' + esc(editing ? item.tag : '') + '"></div></div>' +
-      '<div><label class="lbl" for="f-image">Photo' + (editing ? ' <span class="font-normal">(optional)</span>' : ' <span class="text-red-600" aria-hidden="true">*</span><span class="sr-only"> (required)</span>') + '</label>' +
+      '<div><label class="lbl" for="f-image">Photo' + (imageRequired ? ' <span class="text-red-600" aria-hidden="true">*</span><span class="sr-only"> (required)</span>' : '') + '</label>' +
       '<div class="flex items-center gap-3">' +
       '<span id="image-preview" class="shrink-0 w-14 h-14 rounded-xl bg-tint text-brand flex items-center justify-center overflow-hidden">' + imagePreview + '</span>' +
-      '<input id="f-image" name="image" type="file" accept="image/*" class="field" style="padding:.5rem .7rem"' + (editing ? '' : ' required') + '></div>' +
-      '<p class="text-[11px] text-muted mt-1.5">JPG or PNG. It\u2019s resized automatically before saving.</p>' +
-      (editing && item.image ? '<label class="flex items-center gap-2 text-xs text-muted"><input type="checkbox" name="removeImage" class="w-4 h-4" style="accent-color:var(--brand)"> Remove current photo</label>' : '') + '</div>' +
+      '<input id="f-image" name="image" type="file" accept="image/*" class="field" style="padding:.5rem .7rem"' + (imageRequired ? ' required' : '') + '></div>' +
+      (editing ? '' : '<p class="text-[11px] text-muted mt-1.5">JPG or PNG. It\u2019s resized automatically before saving.</p>') + '</div>' +
       '<p id="form-error" class="text-sm t-bad min-h-[1.25rem]" role="alert"></p>' +
       '<div class="flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button type="submit" class="btn btn-primary">' + (editing ? 'Save details' : 'Add equipment') + '</button></div></form>';
   }
@@ -1944,7 +1967,8 @@
       '<button data-action="close-modal" class="w-7 h-7 -ml-1 rounded-md flex items-center justify-center hover:bg-white/15" aria-label="Back">' + icon('chevronleft', 'w-5 h-5') + '</button>' +
       '<h2 class="font-display font-bold text-lg truncate">' + esc(a.name) + '</h2></div>' +
       '<div class="px-1">' +
-      '<div class="flex items-center gap-4"><div class="shrink-0">' + profile + '</div><div class="min-w-0"><p class="font-semibold truncate">' + esc(a.name) + '</p><p class="text-xs text-muted break-all">' + esc(a.email || '\u2014') + '</p>' + rolePill(a.role) + '</div></div>' +
+      '<div class="flex items-center gap-3"><div class="shrink-0">' + profile + '</div><div class="min-w-0 flex-1"><p class="font-semibold truncate">' + esc(a.name) + '</p><p class="text-xs text-muted break-all">' + esc(a.email || '\u2014') + '</p>' + rolePill(a.role) + '</div>' +
+      '<div class="shrink-0 text-right"><span class="block text-[10px] text-muted">ID No.</span><span class="block max-w-[100px] truncate text-xs font-semibold" title="' + esc(a.idNumber || '\u2014') + '">' + esc(a.idNumber || '\u2014') + '</span></div></div>' +
       '<div class="mt-4 rounded-xl border border-line px-3">' +
       detailRow('Gender', a.gender) +
       detailRow('Email', a.email) +
@@ -2033,6 +2057,8 @@
     var name = String(f.get('name') || '').trim(), catRaw = String(f.get('category') || '');
     if (!name) return formError('Give the item a name.');
     name = name.charAt(0).toLocaleUpperCase() + name.slice(1);
+    var brand = String(f.get('brand') || '').trim();
+    var details = String(f.get('details') || '').trim();
     var location = String(f.get('location') || '').trim();
     if (!location) return formError('Enter the item location.');
     var cat = catRaw === 'Other' ? String(f.get('customCategory') || '').trim() : catRaw;
@@ -2046,7 +2072,7 @@
       .then(function (imageData) {
         var ref = equipmentCol.doc();
         var tag = String(f.get('tag') || '').trim().toUpperCase() || ((TAG_PREFIX[cat] || 'OT') + '-' + ref.id.slice(0, 4).toUpperCase());
-        return ref.set({ id: ref.id, name: name, category: cat, tag: tag, location: location, maintenance: false, image: imageData || null }).then(function () { return ref.id; });
+        return ref.set({ id: ref.id, name: name, category: cat, tag: tag, brand: brand, details: details, location: location, maintenance: false, image: imageData || null }).then(function () { return ref.id; });
       })
       .then(function (newId) {
         toast('Added ' + name + ' to the inventory.');
@@ -2069,12 +2095,14 @@
     var name = String(f.get('name') || '').trim(), catRaw = String(f.get('category') || '');
     if (!name) return formError('Give the item a name.');
     name = name.charAt(0).toLocaleUpperCase() + name.slice(1);
+    var brand = String(f.get('brand') || '').trim();
+    var details = String(f.get('details') || '').trim();
     var location = String(f.get('location') || '').trim();
     if (!location) return formError('Enter the item location.');
     var cat = catRaw === 'Other' ? String(f.get('customCategory') || '').trim() : catRaw;
     if (!cat) return formError('Enter a name for the category.');
     var file = form.elements.image && form.elements.image.files[0];
-    var removeImage = f.get('removeImage') === 'on';
+    if (!file && !item.image) return formError('Add an item photo before saving.');
     var submitBtn = form.querySelector('button[type=submit]');
     if (submitBtn) submitBtn.disabled = true;
     compressImage(file)
@@ -2085,8 +2113,10 @@
           name: name,
           category: cat,
           tag: tag,
+          brand: brand,
+          details: details,
           location: location,
-          image: imageData || (removeImage ? null : item.image || null)
+          image: imageData || item.image || null
         });
       })
       .then(function () {
@@ -2131,7 +2161,7 @@
         state.view = el.dataset.view; state.sidebarOpen = false;
         if (state.view === 'messages' && state.chatUserId) markChatRead(state.chatUserId);
         if (state.view === 'history') { state.filter.history = el.dataset.filter || 'all'; state.q.history = ''; }
-        if (state.view === 'inventory') { state.filter.inventory = 'all'; state.q.inventory = ''; }
+        if (state.view === 'inventory') { state.filter.inventory = 'all'; state.filter.inventoryCategory = 'all'; state.q.inventory = ''; }
         if (state.view === 'users') { state.filter.usersRole = 'all'; state.filter.usersCourse = 'all'; state.q.users = ''; }
         if (state.view === 'notifications') markAdminNotificationsRead();
         render(); break;
@@ -2162,7 +2192,6 @@
       case 'reject': reject(id); break;
       case 'approve-request': approveRequest(id); break;
       case 'reject-request': rejectRequest(id); break;
-      case 'requests-tab': state.tab.requests = el.dataset.tab; render(); break;
       case 'open-account': openModal({ type: 'account', id: id }); break;
       case 'users-role': state.filter.usersRole = el.dataset.value; render(); break;
       case 'open-user': openModal({ type: 'user-detail', id: id }); break;
@@ -2247,6 +2276,9 @@
     }
     if (ev.target && ev.target.dataset && ev.target.dataset.action === 'users-course') {
       state.filter.usersCourse = ev.target.value; render(); return;
+    }
+    if (ev.target && ev.target.dataset && ev.target.dataset.action === 'inventory-category') {
+      state.filter.inventoryCategory = ev.target.value; render(); return;
     }
     if (ev.target && ev.target.name === 'start') {
       var end = ev.target.form.elements.end;
