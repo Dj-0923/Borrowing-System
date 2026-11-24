@@ -1854,8 +1854,8 @@
     return modalHead(editing ? 'Edit equipment details' : 'Add equipment',
       editing ? 'Update the equipment information. Its current status will not change.' : 'New items start as available.') +
       '<form data-form="' + (editing ? 'edit-equipment' : 'add') + '"' + (editing ? ' data-id="' + esc(item.id) + '"' : '') + ' novalidate class="mt-5 grid gap-4">' +
-      '<div><label class="lbl" for="f-name">Name</label><input id="f-name" name="name" class="field" placeholder="e.g. Sony A7 Camera" maxlength="60" autocomplete="off" value="' + esc(editing ? item.name : '') + '"></div>' +
-      '<div><label class="lbl" for="f-brand">Brand <span class="font-normal">(optional)</span></label><input id="f-brand" name="brand" class="field" placeholder="e.g. Sony, Aula" maxlength="60" autocomplete="off" value="' + esc(editing ? item.brand : '') + '"></div>' +
+      '<div><label class="lbl" for="f-name">Name</label><input id="f-name" name="name" class="field" placeholder="e.g. Camera A" maxlength="60" autocomplete="off" value="' + esc(editing ? item.name : '') + '"></div>' +
+      '<div><label class="lbl" for="f-brand">Brand <span class="font-normal">(optional)</span></label><input id="f-brand" name="brand" class="field" placeholder="Enter brand if known" maxlength="60" autocomplete="off" value="' + esc(editing ? item.brand : '') + '"></div>' +
       '<div><label class="lbl" for="f-details">Details <span class="font-normal">(optional)</span></label><textarea id="f-details" name="details" class="field" rows="3" maxlength="500" placeholder="Describe the item">' + esc(editing ? item.details : '') + '</textarea></div>' +
       '<div><label class="lbl" for="f-location">Location</label><input id="f-location" name="location" class="field" placeholder="e.g. AV Storage, Room 101" maxlength="80" autocomplete="off" value="' + esc(editing ? item.location : '') + '"></div>' +
       '<div class="grid grid-cols-2 gap-3">' +

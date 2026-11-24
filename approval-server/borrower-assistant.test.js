@@ -14,7 +14,7 @@ const equipment = [
   { id: "eq1", name: "Canon R50", category: "Camera", tag: "CAM-001", location: "Room 1" },
   { id: "eq2", name: "Epson X49", category: "Projector", tag: "PRJ-001", location: "Room 2" },
   { id: "eq3", name: "Dell Latitude", category: "Laptop", tag: "LAP-001", location: "Room 3" },
-  { id: "eq4", name: "Sony A7", category: "Camera", tag: "CAM-002", location: "Room 1", maintenance: true },
+  { id: "eq4", name: "Camera Two", category: "Camera", tag: "CAM-002", location: "Room 1", maintenance: true },
 ];
 const personalLoans = [
   { id: "l1", name: "Canon R50", equipmentId: "eq1", status: "approved", checkedOutAt: "x", start: "2026-11-01", end: "2026-11-10" },
@@ -25,6 +25,7 @@ const respond = (q, extra = {}) => {
   const classified = fallbackBorrowerIntent(q, equipment);
   return buildBorrowerAssistantResponse({
     ...classified,
+    question: q,
     equipment,
     activeLoans: personalLoans,
     personalLoans,
@@ -134,11 +135,81 @@ test("availability phrased as 'do you have', 'is there', 'can I borrow', 'meron 
 
 test("availability answers stay grounded in inventory", () => {
   const { answer, items } = respond("can I borrow a camera");
-  // Canon R50 is checked out and Sony A7 is in maintenance, so no camera is available.
+  // Canon R50 is checked out and Camera Two is in maintenance, so no camera is available.
   assert.equal(items.length, 0);
   assert.match(answer, /no available items/i);
   const laptops = respond("meron bang laptop?");
   assert.deepEqual(laptops.items.map((i) => i.id), ["eq3"]);
+});
+
+test("brand answers use only saved brands and include matching item cards", () => {
+  const savedBrand = respond("What brand is Canon R50?", {
+    equipment: [{ ...equipment[0], brand: "Canon" }],
+  });
+  assert.equal(savedBrand.answer, "The brand is Canon.");
+  assert.deepEqual(savedBrand.items.map((item) => item.id), ["eq1"]);
+
+  const savedFilipinoBrand = respond("Anong brand ng Canon R50?", {
+    equipment: [{ ...equipment[0], brand: "Canon" }],
+  });
+  assert.equal(savedFilipinoBrand.answer, "Ang brand ay Canon.");
+  assert.deepEqual(savedFilipinoBrand.items.map((item) => item.id), ["eq1"]);
+
+  const missingEnglishBrand = respond("What brand is Camera Two?", {
+    equipment: [equipment[3]],
+  });
+  assert.equal(missingEnglishBrand.answer, "Brand Not specified.");
+  assert.deepEqual(missingEnglishBrand.items.map((item) => item.id), ["eq4"]);
+
+  for (const question of [
+    "Anong brand ng camera?",
+    "Anong brand ng Camera meron kayo?",
+    "Ano ang brand ng Camera?",
+  ]) {
+    const missingFilipinoBrand = respond(question, {
+      equipment: [equipment[3]],
+    });
+    assert.equal(missingFilipinoBrand.answer, "Walang naka-lagay na Brand.");
+    assert.deepEqual(
+      missingFilipinoBrand.items.map((item) => item.id),
+      ["eq4"],
+    );
+  }
+});
+
+test("brand questions match arbitrary item-name keywords, not only cameras", () => {
+  const keyboard = {
+    id: "keyboard-1",
+    name: "Mechanical Keyboard",
+    category: "Accessories",
+    tag: "KEY-001",
+    location: "IT Room",
+  };
+  const question = "Ano ang brand ng Keyboard?";
+  const classified = fallbackBorrowerIntent(question, [keyboard]);
+  assert.deepEqual(classified, {
+    intent: "item_details",
+    category: "",
+    itemQuery: "keyboard",
+  });
+  const missingBrand = buildBorrowerAssistantResponse({
+    ...classified,
+    question,
+    equipment: [keyboard],
+    language: borrowerAnswerLanguage(question),
+  });
+  assert.equal(missingBrand.answer, "Walang naka-lagay na Brand.");
+  assert.deepEqual(missingBrand.items.map((item) => item.id), ["keyboard-1"]);
+
+  const savedKeyboard = { ...keyboard, brand: "Logitech" };
+  const savedBrand = buildBorrowerAssistantResponse({
+    ...classified,
+    question,
+    equipment: [savedKeyboard],
+    language: borrowerAnswerLanguage(question),
+  });
+  assert.equal(savedBrand.answer, "Ang brand ay Logitech.");
+  assert.deepEqual(savedBrand.items.map((item) => item.id), ["keyboard-1"]);
 });
 
 test("deadline questions phrased 'when do I return', overdue, hanggang kailan", () => {

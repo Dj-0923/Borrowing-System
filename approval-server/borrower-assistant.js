@@ -155,6 +155,96 @@ function manilaToday() {
   }).format(new Date());
 }
 
+function itemDetailField(question) {
+  const normalized = String(question || "").toLowerCase();
+  if (/\b(?:brand|brands|manufacturer|tatak|marka|gawa ng)\b/.test(normalized)) {
+    return "brand";
+  }
+  if (/\bmodel(?: number| name)?\b/.test(normalized)) return "model";
+  if (
+    /\b(?:condition|kondisyon|kalagayan|gumagana|sira|damaged|maayos)\b/.test(
+      normalized,
+    )
+  ) {
+    return "condition";
+  }
+  if (
+    /\b(?:specs?|specifications?|features?|resolution|megapixels?|lumens|battery)\b/.test(
+      normalized,
+    )
+  ) {
+    return "specs";
+  }
+  return "";
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function brandCandidates(equipment) {
+  const brands = new Map();
+  for (const item of equipment) {
+    const brand = typeof item.brand === "string" ? item.brand.trim() : "";
+    if (brand) {
+      brands.set(brand.toLowerCase(), brand);
+    }
+  }
+  return [...brands.values()];
+}
+
+function mentionedBrandOf(normalizedQuestion, equipment) {
+  return brandCandidates(equipment)
+    .filter((brand) =>
+      new RegExp(`\\b${escapeRegExp(brand.toLowerCase())}\\b`).test(
+        normalizedQuestion,
+      ),
+    )
+    .sort((a, b) => b.length - a.length)[0] || "";
+}
+
+function itemSearchMatch(item, query) {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  const haystack = [
+    item.name,
+    item.category,
+    item.id,
+    item.tag,
+    item.brand,
+    item.model,
+  ]
+    .filter((value) => typeof value === "string" || typeof value === "number")
+    .join(" ")
+    .toLowerCase();
+  if (haystack.includes(normalizedQuery)) return true;
+  const tokens = normalizedQuery.split(/\s+/).filter((token) => token.length >= 2);
+  return (
+    tokens.length > 0 &&
+    tokens.every(
+      (token) =>
+        haystack.includes(token) ||
+        (token.length > 3 && token.endsWith("s") && haystack.includes(token.slice(0, -1))),
+    )
+  );
+}
+
+function brandItemQuery(question) {
+  const ignoredWords = new Set([
+    "a", "an", "and", "any", "are", "about", "available", "ba", "brand",
+    "brands", "can", "do", "does", "equipment", "for", "gawa", "have",
+    "has", "in", "inventory", "is", "it", "item", "items", "kayo", "ko",
+    "ma", "marka", "may", "meron", "mo", "mga", "manufacturer", "naman",
+    "na", "ng", "ninyo", "namin", "of", "our", "please", "sa", "stock",
+    "tatak", "the", "this", "that", "to", "what", "which", "with", "you",
+    "your", "yung", "ano", "ang", "anong", "akin", "ako",
+  ]);
+  return normalizeConversationText(question)
+    .split(" ")
+    .filter((word) => word && !ignoredWords.has(word))
+    .join(" ");
+}
+
 function fallbackBorrowerIntent(question, equipment) {
   const conversational = conversationalIntent(question);
   if (conversational) {
@@ -170,6 +260,7 @@ function fallbackBorrowerIntent(question, equipment) {
       .filter((value) => typeof value === "string" && value.trim())
       .some((value) => normalized.includes(value.toLowerCase())),
   );
+  const mentionedBrand = mentionedBrandOf(normalized, equipment);
   const mentionedCategory = [...new Set(
     equipment
       .map((item) => item.category)
@@ -178,6 +269,12 @@ function fallbackBorrowerIntent(question, equipment) {
     normalized.includes(category.toLowerCase()) ||
     normalized.includes(normalizeCategory(category)),
   ) || "";
+  const detailField = itemDetailField(normalized);
+  const detailQuery = detailField === "brand" ? brandItemQuery(normalized) : "";
+  const queryValue =
+    mentionedItem?.name ||
+    mentionedBrand ||
+    (mentionedCategory ? "" : detailQuery);
 
   if (
     /\b(deadlines?|due dates?|return dates?|when .* due)\b|\b(?:kailan|kelan)\b.{0,40}\b(?:due|deadline|ibalik\w*|ibabalik|return)\b|\boverdue\b|\bpast due\b|\blampas\b|\blagpas\b|\bhanggang kailan\b|\bwhen\b.{0,20}\b(?:do|should|must|can|will|am) i\b.{0,25}\b(?:return|give back|bring back)\b/.test(
@@ -210,8 +307,24 @@ function fallbackBorrowerIntent(question, equipment) {
           itemQuery: "",
         };
   }
+  if (
+    detailField &&
+    (mentionedItem ||
+      mentionedCategory ||
+      mentionedBrand ||
+      detailQuery ||
+      /\b(?:equipment|items?|inventory|tools?|devices?|gamit|kagamitan)\b/.test(
+        normalized,
+      ))
+  ) {
+    return {
+      intent: "item_details",
+      category: mentionedCategory,
+      itemQuery: queryValue,
+    };
+  }
   const hasInventoryContext =
-    Boolean(mentionedItem || mentionedCategory) ||
+    Boolean(mentionedItem || mentionedCategory || mentionedBrand) ||
     /\b(equipment|items?|inventory|stock|borrow|request|recommend|suggest|tools?|devices?|hiram|hiramin|hihiram|humiram|manghiram|manghihiram|paghiram|hiraman|gamit|kagamitan)\b/.test(
       normalized,
     ) ||
@@ -232,7 +345,7 @@ function fallbackBorrowerIntent(question, equipment) {
     return {
       intent: "item_status",
       category: mentionedCategory,
-      itemQuery: mentionedItem?.name || "",
+      itemQuery: queryValue,
     };
   }
   if (
@@ -243,7 +356,7 @@ function fallbackBorrowerIntent(question, equipment) {
     return {
       intent: "available_items",
       category: mentionedCategory,
-      itemQuery: mentionedItem?.name || "",
+      itemQuery: queryValue,
     };
   }
   if (
@@ -254,7 +367,14 @@ function fallbackBorrowerIntent(question, equipment) {
     return {
       intent: "suggest_item",
       category: mentionedCategory,
-      itemQuery: mentionedItem?.name || "",
+      itemQuery: queryValue,
+    };
+  }
+  if (mentionedBrand && !mentionedItem) {
+    return {
+      intent: "item_details",
+      category: mentionedCategory,
+      itemQuery: mentionedBrand,
     };
   }
   if (
@@ -267,7 +387,7 @@ function fallbackBorrowerIntent(question, equipment) {
     return {
       intent: "item_question",
       category: mentionedCategory,
-      itemQuery: mentionedItem?.name || "",
+      itemQuery: queryValue,
     };
   }
   if (
@@ -278,7 +398,7 @@ function fallbackBorrowerIntent(question, equipment) {
     return {
       intent: "inventory_list",
       category: mentionedCategory,
-      itemQuery: mentionedItem?.name || "",
+      itemQuery: queryValue,
     };
   }
   return { intent: "unknown", category: "", itemQuery: "" };
@@ -427,10 +547,7 @@ function availableItems(equipment, activeLoans, category, itemQuery = "") {
         !item.maintenance &&
         !borrowedIds.has(item.id) &&
         categoryMatches(item, category) &&
-        (!normalizedQuery ||
-          `${item.name || ""} ${item.category || ""} ${item.id || ""} ${item.tag || ""}`
-            .toLowerCase()
-            .includes(normalizedQuery)),
+        (!normalizedQuery || itemSearchMatch(item, normalizedQuery)),
     )
     .sort((a, b) =>
       String(a.name || "").localeCompare(String(b.name || "")),
@@ -480,10 +597,7 @@ function matchingItems(equipment, category, itemQuery) {
       `${item.category || ""} ${item.name || ""}`
         .toLowerCase()
         .includes(category.toLowerCase());
-    const queryMatches = !normalizedQuery ||
-      `${item.name || ""} ${item.category || ""} ${item.id || ""} ${item.tag || ""}`
-        .toLowerCase()
-        .includes(normalizedQuery);
+    const queryMatches = !normalizedQuery || itemSearchMatch(item, normalizedQuery);
     return categoryMatches && queryMatches;
   });
 }
@@ -691,6 +805,97 @@ function buildItemQuestionAnswer({
     : `Here is the information recorded in Lendy:\n${details.join("\n")}\nI can only confirm details saved in the inventory.`;
 }
 
+function itemDetailValue(item, field) {
+  const raw = field === "brand"
+    ? item.brand
+    : field === "model"
+      ? item.model
+      : field === "condition"
+        ? item.condition
+        : field === "specs"
+          ? item.specifications || item.specs || item.features
+          : item.description;
+  const text = Array.isArray(raw)
+    ? raw.join(", ")
+    : typeof raw === "number"
+      ? String(raw)
+      : typeof raw === "string"
+        ? raw.trim()
+        : "";
+  return text.slice(0, 160);
+}
+
+function buildItemDetailsAnswer({
+  question = "",
+  category = "",
+  itemQuery = "",
+  equipment = [],
+  activeLoans = [],
+  language = "english",
+}) {
+  const filipino = language === "filipino";
+  const matches = matchingItems(equipment, category, itemQuery).slice(0, 8);
+  if (matches.length === 0) {
+    return itemQuery
+      ? filipino
+        ? `Walang item na tumutugma sa "${itemQuery}" sa Lendy inventory.`
+        : `I couldn't find an item matching "${itemQuery}" in the Lendy inventory.`
+      : filipino
+        ? "Walang nahanap na tumutugmang item sa Lendy inventory."
+        : "I couldn't find a matching item in the Lendy inventory.";
+  }
+  const requested = itemDetailField(question) || "any";
+  if (requested === "brand") {
+    const savedBrands = [
+      ...new Set(
+        matches
+          .map((item) => itemDetailValue(item, "brand"))
+          .filter(Boolean),
+      ),
+    ];
+    const missingBrand = matches.some(
+      (item) => !itemDetailValue(item, "brand"),
+    );
+    if (savedBrands.length === 0) {
+      return filipino ? "Walang naka-lagay na Brand." : "Brand Not specified.";
+    }
+    const brands = savedBrands.join(", ");
+    if (savedBrands.length === 1 && !missingBrand) {
+      return filipino
+        ? `Ang brand ay ${brands}.`
+        : `The brand is ${brands}.`;
+    }
+    return filipino
+      ? `Mga brand na naka-save: ${brands}.${missingBrand ? " May item na walang naka-lagay na Brand." : ""}`
+      : `Saved brands: ${brands}.${missingBrand ? " Some items have no brand specified." : ""}`;
+  }
+  const labels = {
+    brand: "Brand",
+    model: "Model",
+    condition: filipino ? "Kondisyon" : "Condition",
+    specs: "Specs",
+    description: "Description",
+  };
+  const fields = requested === "any"
+    ? ["brand", "model", "condition", "specs", "description"]
+    : [requested];
+  const notRecorded = filipino ? "hindi naka-save" : "not recorded";
+  const lines = matches.map((item) => {
+    const parts = fields
+      .map((field) => {
+        const value = itemDetailValue(item, field);
+        if (value) return `${labels[field]}: ${value}`;
+        return field === requested ? `${labels[field]}: ${notRecorded}` : "";
+      })
+      .filter(Boolean);
+    parts.push(`Status: ${itemStatus(item, activeLoans)}`);
+    return `${item.name || "Unnamed item"} — ${parts.join("; ")}`;
+  });
+  return filipino
+    ? `Ito ang naka-save sa Lendy para sa ${matches.length} tumutugmang item:\n${lines.join("\n")}\nAng makukumpirma ko lang ay ang impormasyong naka-save sa inventory.`
+    : `Here's what Lendy has recorded for ${matches.length} matching item(s):\n${lines.join("\n")}\nI can only confirm details saved in the inventory.`;
+}
+
 function buildBorrowerAssistantAnswer({
   intent,
   category = "",
@@ -701,6 +906,7 @@ function buildBorrowerAssistantAnswer({
   profileField = "",
   personalProfile = {},
   answer = "",
+  question = "",
   language = "english",
   today = manilaToday(),
 }) {
@@ -722,8 +928,18 @@ function buildBorrowerAssistantAnswer({
   }
   if (intent === "help") {
     return filipino
-      ? "Matutulungan kitang tingnan ang available na equipment at status ng mga item, ang mga loan at due date mo, at ang mga detalye ng profile mo. Halimbawa: \"Anong camera ang available?\" o \"Kailan ang due ng hiniram ko?\""
-      : "I can help you check available equipment and item status, see your loans and due dates, and look up your profile details. For example: \"What cameras are available?\" or \"When are my items due?\"";
+      ? "Matutulungan kitang tingnan ang available na equipment at status ng mga item, ang mga loan at due date mo, at ang mga detalye ng profile mo. Halimbawa: \"Anong camera ang available?\", \"Anong brand ng projector?\" o \"Kailan ang due ng hiniram ko?\""
+      : "I can help you check available equipment and item status, see your loans and due dates, and look up your profile details. For example: \"What cameras are available?\", \"What brand is the projector?\" or \"When are my items due?\"";
+  }
+  if (intent === "item_details") {
+    return buildItemDetailsAnswer({
+      question,
+      category,
+      itemQuery,
+      equipment,
+      activeLoans,
+      language,
+    });
   }
   if (intent === "my_profile") {
     return buildBorrowerProfileAnswer(profileField, personalProfile, language);
@@ -880,7 +1096,9 @@ function buildBorrowerAssistantResponse(input) {
           .slice(0, input.intent === "suggest_item" ? 5 : 20)
       : [];
   const itemResults =
-    input.intent === "maintenance_items"
+    input.intent === "item_details"
+      ? matchingItems(input.equipment, input.category, input.itemQuery).slice(0, 8)
+      : input.intent === "maintenance_items"
       ? matchingItems(input.equipment, input.category, input.itemQuery)
           .filter(
             (item) => itemStatus(item, input.activeLoans) === "In Maintenance",
@@ -901,6 +1119,8 @@ function buildBorrowerAssistantResponse(input) {
     category: item.category || "",
     location: item.location || "",
     tag: item.tag || "",
+    brand: typeof item.brand === "string" ? item.brand : "",
+    model: typeof item.model === "string" ? item.model : "",
     status: itemStatus(item, input.activeLoans),
   }));
   return { answer, items };
@@ -913,5 +1133,6 @@ module.exports = {
   findInventoryCategory,
   fallbackBorrowerIntent,
   isBorrowerDomainQuestion,
+  itemDetailField,
   itemStatus,
 };
