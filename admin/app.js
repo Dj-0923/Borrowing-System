@@ -24,6 +24,13 @@
   var MON_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   var CATEGORIES = { Computers: 'laptop', Cameras: 'camera', Tablets: 'tablet', Displays: 'projector', Robotics: 'cpu', Audio: 'headphones', Other: 'box' };
   var TAG_PREFIX = { Computers: 'LT', Cameras: 'CM', Tablets: 'TB', Displays: 'PJ', Robotics: 'RB', Audio: 'AU', Other: 'OT' };
+  function equipmentTag(item) {
+    var tag = String(item && item.tag || '').trim();
+    if (tag && tag !== String(item.id || '')) return tag;
+    var id = String(item && item.id || '');
+    if (!id) return 'Tag not set';
+    return (TAG_PREFIX[item.category] || 'OT') + '-' + id.slice(0, 4).toUpperCase();
+  }
 
   var pad = function (n) { return String(n).padStart(2, '0'); };
   var iso = function (d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
@@ -703,7 +710,7 @@
         var days = diffDays(l.end, l.start) + 1;
         return '<div class="rounded-2xl bg-card border border-line shadow-soft p-4 sm:p-5 flex flex-wrap items-center gap-4">' +
           mediaTile(e, 'w-12 h-12') +
-          '<div class="min-w-[180px] flex-1"><p class="font-semibold">' + esc(l.name) + (e ? ' <span class="text-xs font-normal text-muted">' + esc(e.tag) + '</span>' : '') + '</p>' +
+          '<div class="min-w-[180px] flex-1"><p class="font-semibold">' + esc(l.name) + (e ? ' <span class="text-xs font-normal text-muted">' + esc(equipmentTag(e)) + '</span>' : '') + '</p>' +
           '<p class="text-sm text-muted mt-0.5">' + esc(borrowerName(l)) + ' · <span class="tnum">' + fmt(l.start) + ' → ' + fmt(l.end) + '</span> · ' + plural(days, 'day') + '</p>' +
           '<p class="mt-2 flex items-center gap-2 text-xs text-muted">' + pill(st) + note + '</p></div>' +
           '<div class="flex gap-2 ml-auto">' +
@@ -737,7 +744,7 @@
         return '<div class="rounded-2xl bg-card border border-line shadow-soft p-4 sm:p-5 flex flex-wrap items-center gap-4">' +
           mediaTile(equipment, 'w-12 h-12') +
           '<div class="min-w-[220px] flex-1"><div class="flex flex-wrap items-center gap-2"><p class="font-semibold">' + esc(loan.name) + '</p>' + pill('return_pending') + '</div>' +
-          '<p class="text-sm text-muted mt-1">' + esc(borrowerName(loan)) + (equipment && equipment.tag ? ' · ' + esc(equipment.tag) : '') + '</p>' +
+          '<p class="text-sm text-muted mt-1">' + esc(borrowerName(loan)) + (equipment ? ' · ' + esc(equipmentTag(equipment)) : '') + '</p>' +
           '<p class="text-xs text-muted mt-1">Reported ' + esc(returnRequestedTime(loan.returnRequestedAt)) + '</p>' +
           '<div class="mt-3"><label class="sr-only" for="return-reason-' + loan.id + '">Reason for not verifying return</label>' +
           '<input id="return-reason-' + loan.id + '" data-rejection-reason="' + loan.id + '" class="field w-full" maxlength="300" placeholder="Reason required if return is not verified"></div></div>' +
@@ -1259,7 +1266,7 @@
     var rows = all.filter(function (e) {
       return (f === 'all' || itemStatus(e) === f) &&
         (categoryFilter === 'all' || normName(e.category) === normName(categoryFilter)) &&
-        (!q || (e.name + ' ' + e.category + ' ' + e.tag).toLowerCase().indexOf(q) !== -1);
+        (!q || (e.name + ' ' + e.category + ' ' + equipmentTag(e)).toLowerCase().indexOf(q) !== -1);
     });
     var categorySelect = '<select aria-label="Filter by category" data-action="inventory-category" class="field" style="width:auto;min-width:10rem">' +
       '<option value="all"' + (categoryFilter === 'all' ? ' selected' : '') + '>All categories</option>' +
@@ -1285,7 +1292,7 @@
             '<button class="btn btn-ghost btn-sm" data-action="maintenance-off" data-id="' + e.id + '">Back in service</button>' +
             qrBtn + '<button class="btn btn-ghost btn-sm" data-action="delete-item" data-id="' + e.id + '" aria-label="Remove ' + esc(e.name) + '">' + icon('trash', 'w-3.5 h-3.5') + '</button>';
           return '<div class="grid ' + C + ' gap-x-1 gap-y-3 sm:gap-x-2 xl:gap-x-3 px-2 sm:px-4 py-3 items-center text-[13px] border-t border-line">' +
-            '<span class="flex items-center gap-1 sm:gap-3 min-w-0">' + mediaTile(e, 'w-6 h-6 sm:w-9 sm:h-9') + '<span class="min-w-0"><span class="block font-medium truncate">' + esc(e.name) + '</span><span class="block text-[11px] text-muted truncate">' + esc(e.tag) + '</span></span></span>' +
+            '<span class="flex items-center gap-1 sm:gap-3 min-w-0">' + mediaTile(e, 'w-6 h-6 sm:w-9 sm:h-9') + '<span class="min-w-0"><span class="block font-medium truncate">' + esc(e.name) + '</span><span class="block text-[11px] text-muted truncate">Tag: ' + esc(equipmentTag(e)) + '</span></span></span>' +
             '<span class="text-muted truncate">' + esc(e.category) + '</span>' +
             '<span class="min-w-0 max-w-full w-full flex flex-col items-end xl:items-start"><span class="hidden sm:inline-flex">' + pill(st) + '</span>' +
             '<span class="pill pill-' + st + ' pill-icon-only sm:hidden" role="img" aria-label="' + esc(LABEL[st] || st) + '" title="' + esc(LABEL[st] || st) + '">' + pillIcon(st) + '</span>' + sub + '</span>' +
@@ -1829,7 +1836,7 @@
     return modalHead('New borrow request', 'Requests go to the approval queue unless you approve them now.') +
       '<form data-form="request" novalidate class="mt-5 grid gap-4">' +
       '<div><label class="lbl" for="f-item">Equipment</label><select id="f-item" name="equipmentId" class="field">' +
-      avail.map(function (e) { return '<option value="' + e.id + '"' + (e.id === m.prefill ? ' selected' : '') + '>' + esc(e.name) + ' (' + esc(e.tag) + ')</option>'; }).join('') + '</select></div>' +
+      avail.map(function (e) { return '<option value="' + e.id + '"' + (e.id === m.prefill ? ' selected' : '') + '>' + esc(e.name) + ' (' + esc(equipmentTag(e)) + ')</option>'; }).join('') + '</select></div>' +
       '<div><label class="lbl" for="f-borrower">Borrower</label><input id="f-borrower" name="borrower" class="field" placeholder="Student or faculty name" maxlength="60" autocomplete="off"></div>' +
       '<div class="grid grid-cols-2 gap-3">' +
       '<div><label class="lbl" for="f-start">Borrow from</label><input id="f-start" name="start" type="date" class="field" value="' + t + '" min="' + t + '"></div>' +
@@ -1863,7 +1870,7 @@
       categories.map(function (category) { return '<option' + (category === selectedCategory ? ' selected' : '') + '>' + esc(category) + '</option>'; }).join('') + '</select>' +
       '<div id="f-custom-category-wrap" class="mt-3"' + (selectedCategory === 'Other' ? '' : ' hidden') + '><label class="lbl" for="f-custom-category">' + (editing ? 'Category name' : 'New category') + '</label>' +
       '<input id="f-custom-category" name="customCategory" class="field" placeholder="Enter category name" maxlength="40" autocomplete="off" value="' + esc(editing && !knownCategory ? item.category : '') + '"></div></div>' +
-      '<div><label class="lbl" for="f-tag">Asset tag <span class="font-normal">(optional)</span></label><input id="f-tag" name="tag" class="field" placeholder="Auto-generated" maxlength="16" autocomplete="off" value="' + esc(editing ? item.tag : '') + '"></div></div>' +
+      '<div><label class="lbl" for="f-tag">Asset tag <span class="font-normal">(optional)</span></label><input id="f-tag" name="tag" class="field" placeholder="Auto-generated" maxlength="16" autocomplete="off" value="' + esc(editing ? equipmentTag(item) : '') + '"></div></div>' +
       '<div><label class="lbl" for="f-image">Photo' + (imageRequired ? ' <span class="text-red-600" aria-hidden="true">*</span><span class="sr-only"> (required)</span>' : '') + '</label>' +
       '<div class="flex items-center gap-3">' +
       '<span id="image-preview" class="shrink-0 w-14 h-14 rounded-xl bg-tint text-brand flex items-center justify-center overflow-hidden">' + imagePreview + '</span>' +
@@ -1907,7 +1914,7 @@
       '<div class="qr-print mt-4 flex flex-col items-center text-center gap-2 rounded-2xl border border-line p-5">' +
       '<img src="' + qrImg + '" alt="QR code for ' + esc(e.name) + '" class="w-44 h-44 rounded-lg" width="176" height="176">' +
       '<p class="font-display font-bold mt-1">' + esc(e.name) + '</p>' +
-      '<p class="text-xs text-muted">' + esc(e.tag) + '</p></div>' +
+      '<p class="text-xs text-muted">Tag: ' + esc(equipmentTag(e)) + '</p></div>' +
       '<div class="mt-5 flex flex-wrap justify-end gap-2">' +
       '<button type="button" class="btn btn-primary" data-action="print-qr">Print label</button></div>';
   }
@@ -2071,7 +2078,7 @@
     compressImage(file)
       .then(function (imageData) {
         var ref = equipmentCol.doc();
-        var tag = String(f.get('tag') || '').trim().toUpperCase() || ((TAG_PREFIX[cat] || 'OT') + '-' + ref.id.slice(0, 4).toUpperCase());
+        var tag = String(f.get('tag') || '').trim().toUpperCase() || equipmentTag({ id: ref.id, category: cat });
         return ref.set({ id: ref.id, name: name, category: cat, tag: tag, brand: brand, details: details, location: location, maintenance: false, image: imageData || null }).then(function () { return ref.id; });
       })
       .then(function (newId) {
@@ -2107,8 +2114,7 @@
     if (submitBtn) submitBtn.disabled = true;
     compressImage(file)
       .then(function (imageData) {
-        var tag = String(f.get('tag') || '').trim().toUpperCase() || item.tag ||
-          ((TAG_PREFIX[cat] || 'OT') + '-' + item.id.slice(0, 4).toUpperCase());
+        var tag = String(f.get('tag') || '').trim().toUpperCase() || equipmentTag({ id: item.id, category: cat });
         return equipmentCol.doc(item.id).update({
           name: name,
           category: cat,

@@ -23,9 +23,17 @@
     });
   };
   var LABEL = { available: 'Available', borrowed: 'Borrowed', maintenance: 'Maintenance' };
+  var TAG_PREFIX = { Computers: 'LT', Cameras: 'CM', Tablets: 'TB', Displays: 'PJ', Robotics: 'RB', Audio: 'AU', Other: 'OT' };
 
   var root = document.getElementById('app');
   var id = new URLSearchParams(location.search).get('id');
+  function equipmentTag(item) {
+    var tag = String(item && item.tag || '').trim();
+    if (tag && tag !== String(id || '')) return tag;
+    var itemId = String(id || '');
+    if (!itemId) return 'Tag not set';
+    return (TAG_PREFIX[item.category] || 'OT') + '-' + itemId.slice(0, 4).toUpperCase();
+  }
 
   function card(inner) {
     return '<div class="w-full max-w-md rounded-2xl bg-card border border-line shadow-soft p-6">' + inner + '</div>';
@@ -76,7 +84,7 @@
 
     var st = status(), al = activeLoan(), body = '';
     if (equipment.image) body += '<img src="' + equipment.image + '" alt="" class="w-full h-44 object-cover rounded-xl mb-4">';
-    body += '<p class="text-xs text-muted">' + esc(equipment.category) + ' \u00b7 ' + esc(equipment.tag) + '</p>';
+    body += '<p class="text-xs text-muted">' + esc(equipment.category) + ' \u00b7 Tag: ' + esc(equipmentTag(equipment)) + '</p>';
     body += '<h1 class="font-display font-bold text-2xl mt-1 leading-tight">' + esc(equipment.name) + '</h1>';
     body += '<span class="pill pill-' + st + ' mt-3 inline-flex">' + LABEL[st] + '</span>';
 
