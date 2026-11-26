@@ -11,7 +11,7 @@ test("builds stable notifications for approved and rejected requests", () => {
     {
       notificationId: "loan-1_approved",
       title: "Request approved",
-      message: "Camera has been approved.",
+      message: "Camera has been approved. Do not take borrowed items home. Borrowers are responsible for repair or replacement costs for lost or damaged items.",
       type: "approved",
       loanId: "loan-1",
     },

@@ -29,7 +29,7 @@
   var id = new URLSearchParams(location.search).get('id');
   function equipmentTag(item) {
     var tag = String(item && item.tag || '').trim();
-    if (tag && tag !== String(id || '')) return tag;
+    if (tag && tag.length <= 16 && tag !== String(id || '')) return tag;
     var itemId = String(id || '');
     if (!itemId) return 'Tag not set';
     return (TAG_PREFIX[item.category] || 'OT') + '-' + itemId.slice(0, 4).toUpperCase();
@@ -100,7 +100,7 @@
         '<div><label class="lbl" for="q-borrower">Your name</label><input id="q-borrower" name="borrower" class="field" placeholder="Full name" maxlength="60" autocomplete="off"></div>' +
         '<div class="grid grid-cols-2 gap-3">' +
         '<div><label class="lbl" for="q-start">Borrow from</label><input id="q-start" name="start" type="date" class="field" value="' + t + '" min="' + t + '"></div>' +
-        '<div><label class="lbl" for="q-end">Return by</label><input id="q-end" name="end" type="date" class="field" value="' + addDays(t, 3) + '" min="' + t + '"></div></div>' +
+        '<div><label class="lbl" for="q-end">Return by</label><input id="q-end" name="end" type="date" class="field" value="' + addDays(t, 3) + '" min="' + t + '" max="' + addDays(t, 14) + '"></div></div>' +
         '<p id="form-error" class="text-sm t-bad min-h-[1.1rem]" role="alert"></p>' +
         '<button type="submit" class="btn btn-primary">Request to borrow</button></form>';
     }
@@ -110,8 +110,11 @@
     if (!form) return;
     form.addEventListener('submit', onSubmit);
     form.elements.start.addEventListener('change', function () {
-      form.elements.end.min = form.elements.start.value;
-      if (form.elements.end.value < form.elements.start.value) form.elements.end.value = form.elements.start.value;
+      var startDate = form.elements.start.value || today();
+      form.elements.end.min = startDate;
+      form.elements.end.max = addDays(startDate, 14);
+      if (form.elements.start.value && form.elements.end.value < startDate) form.elements.end.value = startDate;
+      if (form.elements.end.value > form.elements.end.max) form.elements.end.value = form.elements.end.max;
     });
   }
 
@@ -125,6 +128,7 @@
     if (!start || !end) { errEl.textContent = 'Choose both dates.'; return; }
     if (start < t) { errEl.textContent = 'The borrow date can\u2019t be in the past.'; return; }
     if (end < start) { errEl.textContent = 'The return date must be on or after the borrow date.'; return; }
+    if (diffDays(end, start) > 14) { errEl.textContent = 'The maximum borrowing period is 14 days.'; return; }
 
     var btn = form.querySelector('button[type=submit]');
     btn.disabled = true;

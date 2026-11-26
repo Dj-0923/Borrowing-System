@@ -77,7 +77,8 @@ service cloud.firestore {
           && request.resource.data.status == 'pending'
           && request.resource.data.keys().hasOnly([
             'id', 'borrowerUid', 'equipmentId', 'name', 'borrower', 'start', 'end',
-            'status', 'returnedOn', 'updatedAt'
+            'startAt', 'endAt', 'durationType', 'requestGroupId', 'status',
+            'returnedOn', 'updatedAt'
           ])
           && request.resource.data.id == loanId
           && request.resource.data.borrowerUid == request.auth.uid
@@ -86,6 +87,24 @@ service cloud.firestore {
           && request.resource.data.borrower is string
           && request.resource.data.start is string
           && request.resource.data.end is string
+          && (!('startAt' in request.resource.data)
+            || request.resource.data.startAt is string)
+          && (!('endAt' in request.resource.data)
+            || request.resource.data.endAt is string)
+          && (!('durationType' in request.resource.data)
+            || request.resource.data.durationType in ['hours', 'days'])
+          && (!('requestGroupId' in request.resource.data)
+            || (request.resource.data.requestGroupId is string
+              && request.resource.data.requestGroupId.size() > 0
+              && request.resource.data.requestGroupId.size() <= 100))
+          && (
+            ('durationType' in request.resource.data
+              && 'startAt' in request.resource.data
+              && 'endAt' in request.resource.data)
+            || (!('durationType' in request.resource.data)
+              && !('startAt' in request.resource.data)
+              && !('endAt' in request.resource.data))
+          )
           && request.resource.data.returnedOn == null
           && request.resource.data.updatedAt is int);
       allow update: if isAdmin()

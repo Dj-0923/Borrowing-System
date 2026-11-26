@@ -102,7 +102,7 @@ function lendyProcessLoanUpdates_(projectId, properties) {
         notificationId: loanId + "_" + loan.status,
         title: approved ? "Request approved" : "Request rejected",
         message: approved
-          ? lendyItemTitle_(loan) + " has been approved."
+          ? lendyItemTitle_(loan) + " has been approved. Do not take borrowed items home. Borrowers are responsible for repair or replacement costs for lost or damaged items."
           : lendyItemTitle_(loan) + " was not approved.",
         type: loan.status,
         loanId: loanId,

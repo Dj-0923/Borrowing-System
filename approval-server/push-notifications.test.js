@@ -148,6 +148,10 @@ test("loan scan distinguishes request decisions from rejected return reports", (
     ["approved", "return_rejected", "rejected", "returned"],
   );
   assert.equal(
+    notifications[0].message,
+    "Laptop has been approved. Do not take borrowed items home. Borrowers are responsible for repair or replacement costs for lost or damaged items.",
+  );
+  assert.equal(
     notifications[1].notificationId,
     "return-rejected_return_rejected_160",
   );

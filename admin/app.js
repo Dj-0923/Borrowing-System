@@ -26,7 +26,7 @@
   var TAG_PREFIX = { Computers: 'LT', Cameras: 'CM', Tablets: 'TB', Displays: 'PJ', Robotics: 'RB', Audio: 'AU', Other: 'OT' };
   function equipmentTag(item) {
     var tag = String(item && item.tag || '').trim();
-    if (tag && tag !== String(item.id || '')) return tag;
+    if (tag && tag.length <= 16 && tag !== String(item.id || '')) return tag;
     var id = String(item && item.id || '');
     if (!id) return 'Tag not set';
     return (TAG_PREFIX[item.category] || 'OT') + '-' + id.slice(0, 4).toUpperCase();
@@ -42,6 +42,19 @@
     var d = parse(s);
     var base = MON[d.getMonth()] + ' ' + d.getDate();
     return d.getFullYear() === new Date().getFullYear() ? base : base + ', ' + d.getFullYear();
+  };
+  var fmtTime = function (s) {
+    var d = new Date(s);
+    if (!s || isNaN(d.getTime())) return '';
+    var hour = d.getHours();
+    return (hour % 12 || 12) + ':' + pad(d.getMinutes()) + (hour < 12 ? ' AM' : ' PM');
+  };
+  var loanPeriod = function (loan) {
+    if (loan.durationType === 'hours' && loan.startAt && loan.endAt) {
+      return fmt(loan.start) + ' · ' + fmtTime(loan.startAt) + ' – ' + fmtTime(loan.endAt);
+    }
+    return fmt(loan.start) + ' → ' + fmt(loan.end) + ' · ' +
+      plural(diffDays(loan.end, loan.start) + 1, 'day');
   };
   var esc = function (s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -304,6 +317,30 @@
   var loanStatus = function (l) { return (l.status === 'approved' && l.end < today()) ? 'overdue' : l.status; };
   var isCheckout = function (l) { return l.status === 'approved' || l.status === 'return_pending' || l.status === 'returned'; };
   var pendingRequests = function () { return db.accountRequests.filter(function (r) { return r.status === 'pending'; }); };
+  function loanRequestMembers(loan) {
+    if (!loan || !loan.requestGroupId) return loan ? [loan] : [];
+    return db.loans.filter(function (item) {
+      return item.requestGroupId === loan.requestGroupId &&
+        item.borrowerUid === loan.borrowerUid;
+    }).sort(function (a, b) {
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+  }
+  function pendingLoanGroups() {
+    var seen = Object.create(null);
+    var groups = [];
+    db.loans.filter(function (loan) { return loan.status === 'pending'; })
+      .sort(function (a, b) { return String(a.start || '').localeCompare(String(b.start || '')); })
+      .forEach(function (loan) {
+        var key = loan.requestGroupId
+          ? String(loan.borrowerUid || '') + ':' + loan.requestGroupId
+          : 'loan:' + loan.id;
+        if (seen[key]) return;
+        seen[key] = true;
+        groups.push(loanRequestMembers(loan));
+      });
+    return groups;
+  }
   function borrowerName(loan) {
     var account = loan.borrowerUid && db.accounts.find(function (a) {
       return a.id === loan.borrowerUid;
@@ -357,10 +394,10 @@
     db.equipment.forEach(function (e) { s[itemStatus(e)]++; });
     db.loans.forEach(function (l) {
       if (l.status === 'approved' || l.status === 'return_pending') s.out++;
-      if (l.status === 'pending') s.pending++;
       if (l.status === 'return_pending') s.returnPending++;
       if (loanStatus(l) === 'overdue') s.overdue++;
     });
+    s.pending = pendingLoanGroups().length;
     return s;
   }
 
@@ -408,7 +445,7 @@
         }
       } else if (st === 'pending') {
         out.push({ id: 'loan-pending-' + l.id, sev: 1, tone: 'warn', icon: 'filecheck', title: borrowerName(l) + ' requested ' + l.name,
-          body: fmt(l.start) + ' → ' + fmt(l.end), action: { label: 'Review', act: 'nav', view: 'approvals' } });
+          body: loanPeriod(l), action: { label: 'Review', act: 'nav', view: 'approvals' } });
       } else if (st === 'returned' && l.returnedOn && diffDays(t, l.returnedOn) <= 2) {
         out.push({ id: 'loan-returned-' + l.id + '-' + l.returnedOn, sev: 3, tone: 'ok', icon: 'check', title: l.name + ' was returned',
           body: borrowerName(l) + ' returned it ' + fmt(l.returnedOn) + '.' });
@@ -679,7 +716,7 @@
       loans.map(function (l) {
         return '<div class="grid ' + COLS + ' gap-3 px-4 py-3.5 items-center text-[13px] border-t border-line">' +
           '<span class="truncate font-medium">' + esc(l.name) + '</span><span class="truncate">' + esc(borrowerName(l)) + '</span>' +
-          '<span class="tnum text-muted">' + fmt(l.start) + ' → ' + fmt(l.end) + '</span>' +
+          '<span class="tnum text-muted">' + loanPeriod(l) + '</span>' +
           '<span class="text-right">' + pill(loanStatus(l)) + '</span></div>';
       }).join('') + '</div></div>';
   }
@@ -698,28 +735,53 @@
   }
 
   function viewApprovals() {
-    var list = db.loans.filter(function (l) { return l.status === 'pending'; })
-      .sort(function (a, b) { return a.start.localeCompare(b.start); });
+    var groups = pendingLoanGroups();
     var body;
-    if (!list.length) {
+    if (!groups.length) {
       body = emptyState('check', "You're all caught up", 'New borrow requests will land here for you to approve or reject.');
     } else {
-      body = '<div class="grid gap-3">' + list.map(function (l) {
-        var e = eqById(l.equipmentId), st = e ? itemStatus(e) : 'maintenance', cur = e ? activeLoanFor(e.id) : null;
-        var note = st === 'available' ? 'Ready to lend' : st === 'borrowed' ? 'On loan until ' + fmt(cur.end) : 'In maintenance';
-        var days = diffDays(l.end, l.start) + 1;
+      body = '<div class="grid gap-3">' + groups.map(function (group) {
+        var firstLoan = group[0];
+        var allPending = group.length > 0 && group.every(function (loan) {
+          return loan.status === 'pending';
+        });
+        var allAvailable = group.length > 0 && group.every(function (loan) {
+          var equipment = eqById(loan.equipmentId);
+          return equipment && itemStatus(equipment) === 'available';
+        });
+        var firstEquipment = eqById(firstLoan.equipmentId);
+        var itemRows = group.map(function (loan) {
+          var equipment = eqById(loan.equipmentId);
+          var status = equipment ? itemStatus(equipment) : 'maintenance';
+          var activeLoan = equipment ? activeLoanFor(equipment.id) : null;
+          var note = status === 'available'
+            ? 'Ready to lend'
+            : status === 'borrowed' && activeLoan
+              ? 'On loan until ' + fmt(activeLoan.end)
+              : equipment ? 'In maintenance' : 'No longer in inventory';
+          return '<div class="flex flex-wrap items-center gap-2 text-xs text-muted">' +
+            '<span class="font-medium text-primary">' + esc(loan.name) +
+            (equipment ? ' · ' + esc(equipmentTag(equipment)) : '') + '</span>' +
+            pill(status) + '<span>' + esc(note) + '</span></div>';
+        }).join('');
         return '<div class="rounded-2xl bg-card border border-line shadow-soft p-4 sm:p-5 flex flex-wrap items-center gap-4">' +
-          mediaTile(e, 'w-12 h-12') +
-          '<div class="min-w-[180px] flex-1"><p class="font-semibold">' + esc(l.name) + (e ? ' <span class="text-xs font-normal text-muted">' + esc(equipmentTag(e)) + '</span>' : '') + '</p>' +
-          '<p class="text-sm text-muted mt-0.5">' + esc(borrowerName(l)) + ' · <span class="tnum">' + fmt(l.start) + ' → ' + fmt(l.end) + '</span> · ' + plural(days, 'day') + '</p>' +
-          '<p class="mt-2 flex items-center gap-2 text-xs text-muted">' + pill(st) + note + '</p></div>' +
+          mediaTile(firstEquipment, 'w-12 h-12') +
+          '<div class="min-w-[180px] flex-1"><p class="font-semibold">' +
+          (group.length > 1 ? esc(plural(group.length, 'item')) + ' requested' : esc(firstLoan.name)) +
+          '</p>' +
+          '<p class="text-sm text-muted mt-0.5">' + esc(borrowerName(firstLoan)) + ' · <span class="tnum">' + loanPeriod(firstLoan) + '</span></p>' +
+          '<div class="mt-2 grid gap-1">' + itemRows + '</div></div>' +
           '<div class="flex gap-2 ml-auto">' +
-          '<button class="btn btn-danger" data-action="reject" data-id="' + l.id + '">' + icon('x', 'w-4 h-4') + 'Reject</button>' +
-          '<button class="btn btn-primary" data-action="approve" data-id="' + l.id + '" ' + (st !== 'available' ? 'disabled title="This item is not available to lend right now"' : '') + '>' + icon('check', 'w-4 h-4') + 'Approve</button>' +
+          '<button class="btn btn-danger" data-action="reject" data-id="' + firstLoan.id + '"' +
+          (!allPending ? ' disabled title="This grouped request is no longer fully pending"' : '') + '>' +
+          icon('x', 'w-4 h-4') + (group.length > 1 ? 'Reject all' : 'Reject') + '</button>' +
+          '<button class="btn btn-primary" data-action="approve" data-id="' + firstLoan.id + '" ' +
+          (!allPending || !allAvailable ? 'disabled title="Every item in this request must be available"' : '') + '>' +
+          icon('check', 'w-4 h-4') + (group.length > 1 ? 'Approve all' : 'Approve') + '</button>' +
           '</div></div>';
       }).join('') + '</div>';
     }
-    return pageHeader('Approval queue', list.length ? plural(list.length, 'request') + ' waiting for your review.' : 'Nothing is waiting for review.') +
+    return pageHeader('Approval queue', groups.length ? plural(groups.length, 'request') + ' waiting for your review.' : 'Nothing is waiting for review.') +
       '<div class="mt-8">' + body + '</div>';
   }
 
@@ -1340,7 +1402,7 @@
           var st = loanStatus(l);
           return '<div class="grid ' + C + ' gap-3 px-4 py-3.5 items-center text-[13px] border-t border-line">' +
             '<span class="truncate font-medium">' + esc(l.name) + '</span><span class="truncate">' + esc(borrowerName(l)) + '</span>' +
-            '<span class="tnum text-muted">' + fmt(l.start) + ' → ' + fmt(l.end) + '</span>' +
+            '<span class="tnum text-muted">' + loanPeriod(l) + '</span>' +
             '<span class="text-center">' + pill(st) + '</span></div>';
         }).join('') + '</div></div>';
     } else {
@@ -1545,25 +1607,74 @@
   function approve(id) {
     var l = db.loans.find(function (x) { return x.id === id; });
     if (!l || l.status !== 'pending') return;
-    var e = eqById(l.equipmentId);
-    if (!e) { toast('That item is no longer in the inventory.', 'bad'); return; }
-    if (e.maintenance) { toast(e.name + ' is in maintenance and cannot be lent.', 'bad'); return; }
-    var cur = activeLoanFor(e.id);
-    if (cur) { toast(e.name + ' is still on loan until ' + fmt(cur.end) + '. Mark it returned first.', 'bad'); return; }
-    loansCol.doc(id).update({ status: 'approved', updatedAt: Date.now() })
+    var group = loanRequestMembers(l);
+    if (group.length > 500) {
+      toast('This grouped request is too large to approve at once.', 'bad');
+      return;
+    }
+    if (group.some(function (loan) { return loan.status !== 'pending'; })) {
+      toast('This grouped request is no longer fully pending.', 'bad');
+      return;
+    }
+    for (var i = 0; i < group.length; i++) {
+      var equipment = eqById(group[i].equipmentId);
+      if (!equipment) {
+        toast(group[i].name + ' is no longer in the inventory.', 'bad');
+        return;
+      }
+      if (equipment.maintenance) {
+        toast(equipment.name + ' is in maintenance and cannot be lent.', 'bad');
+        return;
+      }
+      var activeLoan = activeLoanFor(equipment.id);
+      if (activeLoan) {
+        toast(equipment.name + ' is still on loan until ' + fmt(activeLoan.end) + '. Mark it returned first.', 'bad');
+        return;
+      }
+    }
+    var batch = fsdb.batch();
+    var updatedAt = Date.now();
+    group.forEach(function (loan) {
+      batch.update(loansCol.doc(loan.id), {
+        status: 'approved',
+        updatedAt: updatedAt
+      });
+    });
+    batch.commit()
       .then(function () {
-        toast('Approved ' + e.name + ' for ' + borrowerName(l) + '.');
-        requestImmediateLoanPush(id);
+        toast(group.length > 1
+          ? 'Approved all ' + plural(group.length, 'item') + ' for ' + borrowerName(l) + '.'
+          : 'Approved ' + l.name + ' for ' + borrowerName(l) + '.');
+        group.forEach(function (loan) { requestImmediateLoanPush(loan.id); });
       })
       .catch(fail('Could not approve the request'));
   }
   function reject(id) {
     var l = db.loans.find(function (x) { return x.id === id; });
     if (!l || l.status !== 'pending') return;
-    loansCol.doc(id).update({ status: 'rejected', updatedAt: Date.now() })
+    var group = loanRequestMembers(l);
+    if (group.length > 500) {
+      toast('This grouped request is too large to reject at once.', 'bad');
+      return;
+    }
+    if (group.some(function (loan) { return loan.status !== 'pending'; })) {
+      toast('This grouped request is no longer fully pending.', 'bad');
+      return;
+    }
+    var batch = fsdb.batch();
+    var updatedAt = Date.now();
+    group.forEach(function (loan) {
+      batch.update(loansCol.doc(loan.id), {
+        status: 'rejected',
+        updatedAt: updatedAt
+      });
+    });
+    batch.commit()
       .then(function () {
-        toast('Rejected the request from ' + borrowerName(l) + '.');
-        requestImmediateLoanPush(id);
+        toast(group.length > 1
+          ? 'Rejected the grouped request from ' + borrowerName(l) + '.'
+          : 'Rejected the request from ' + borrowerName(l) + '.');
+        group.forEach(function (loan) { requestImmediateLoanPush(loan.id); });
       })
       .catch(fail('Could not reject the request'));
   }
@@ -1800,19 +1911,36 @@
   }
   function deleteItem(id) {
     var e = eqById(id); if (!e || activeLoanFor(id)) return;
-    var batch = fsdb.batch();
-    var rejectedLoanIds = [];
+    var pendingToReject = Object.create(null);
     db.loans.forEach(function (l) {
       if (l.equipmentId === id && l.status === 'pending') {
-        batch.update(loansCol.doc(l.id), { status: 'rejected', updatedAt: Date.now() });
-        rejectedLoanIds.push(l.id);
+        loanRequestMembers(l).forEach(function (member) {
+          if (member.status === 'pending') pendingToReject[member.id] = member;
+        });
       }
+    });
+    var rejectedLoans = Object.keys(pendingToReject).map(function (loanId) {
+      return pendingToReject[loanId];
+    });
+    if (rejectedLoans.length > 499) {
+      toast('This item has too many pending requests to remove in one operation.', 'bad');
+      return;
+    }
+    var batch = fsdb.batch();
+    var updatedAt = Date.now();
+    rejectedLoans.forEach(function (loan) {
+      batch.update(loansCol.doc(loan.id), {
+        status: 'rejected',
+        updatedAt: updatedAt
+      });
     });
     batch.delete(equipmentCol.doc(id));
     batch.commit()
       .then(function () {
         toast('Removed ' + e.name + ' from the inventory.');
-        rejectedLoanIds.forEach(requestImmediateLoanPush);
+        rejectedLoans.forEach(function (loan) {
+          requestImmediateLoanPush(loan.id);
+        });
       })
       .catch(fail('Could not remove the item'));
   }
@@ -1840,7 +1968,7 @@
       '<div><label class="lbl" for="f-borrower">Borrower</label><input id="f-borrower" name="borrower" class="field" placeholder="Student or faculty name" maxlength="60" autocomplete="off"></div>' +
       '<div class="grid grid-cols-2 gap-3">' +
       '<div><label class="lbl" for="f-start">Borrow from</label><input id="f-start" name="start" type="date" class="field" value="' + t + '" min="' + t + '"></div>' +
-      '<div><label class="lbl" for="f-end">Return by</label><input id="f-end" name="end" type="date" class="field" value="' + addDays(t, 3) + '" min="' + t + '"></div></div>' +
+      '<div><label class="lbl" for="f-end">Return by</label><input id="f-end" name="end" type="date" class="field" value="' + addDays(t, 3) + '" min="' + t + '" max="' + addDays(t, 14) + '"></div></div>' +
       '<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="instant" class="w-4 h-4" style="accent-color:var(--brand)"> Approve now (walk-up checkout)</label>' +
       '<p id="form-error" class="text-sm t-bad min-h-[1.25rem]" role="alert"></p>' +
       '<div class="flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button type="submit" class="btn btn-primary">Create request</button></div></form>';
@@ -2007,6 +2135,20 @@
       m.type === 'account' ? accountBody(m) : m.type === 'user-detail' ? userDetailBody(m) : confirmBody(m);
     root.innerHTML = '<div data-action="backdrop" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4" style="padding-bottom:calc(1rem + env(safe-area-inset-bottom,0px))">' +
       '<div role="dialog" aria-modal="true" class="pop w-full ' + (m.type === 'edit-profile' ? 'max-w-sm' : 'max-w-md') + ' max-h-full overflow-y-auto rounded-2xl bg-card border border-line p-6 shadow-2xl">' + inner + '</div></div>';
+    var requestStart = root.querySelector('#f-start');
+    var requestEnd = root.querySelector('#f-end');
+    if (m.type === 'request' && requestStart && requestEnd) {
+      requestStart.addEventListener('change', function () {
+        var startDate = requestStart.value || today();
+        requestEnd.min = startDate;
+        requestEnd.max = addDays(startDate, 14);
+        if (requestStart.value && requestEnd.value < startDate) {
+          requestEnd.value = startDate;
+        } else if (requestEnd.value > requestEnd.max) {
+          requestEnd.value = requestEnd.max;
+        }
+      });
+    }
     var first = root.querySelector('input:not([type=checkbox]):not([type=file]):not([type=hidden]):not([readonly]), select');
     if (first) first.focus(); else { var b = root.querySelector('.btn-primary, .btn-danger'); if (b) b.focus(); }
   }
@@ -2024,6 +2166,7 @@
     if (!start || !end) return formError('Choose both a borrow date and a return date.');
     if (start < t) return formError('The borrow date cannot be in the past.');
     if (end < start) return formError('The return date must be on or after the borrow date.');
+    if (diffDays(end, start) > 14) return formError('The maximum borrowing period is 14 days.');
     var ref = loansCol.doc();
     ref.set({ id: ref.id, equipmentId: e.id, name: e.name, borrower: borrower, start: start, end: end,
       status: instant ? 'approved' : 'pending', returnedOn: null, updatedAt: Date.now() })
