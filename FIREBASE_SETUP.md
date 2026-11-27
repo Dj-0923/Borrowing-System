@@ -245,9 +245,14 @@ poller cannot run its other notification scans until the indexes are ready.
 
 The poller checks every five minutes, so loan-status pushes and fallback chat
 pushes can be delayed by several minutes. Normal Admin/Fabii chat pushes are
-sent directly through Render after the message is saved. The poller checks due
-dates on the first poll after the Manila date changes; this is best-effort, not
-an exact-midnight guarantee. Apps Script and FCM may also delay execution or
+sent directly through Render after the message is saved. Due reminders are
+checked on the first poll after the Manila date changes for both hour- and
+day-based loans; grouped items with the same request are combined into one
+notification. Active loans due today or already overdue continue to receive a
+daily reminder until returned. This is best-effort, not an exact-midnight
+guarantee. The poller is a separate Apps Script project, so copy updates to
+`approval-server/push-notifications.gs` into its `Code.gs`; Render deployment
+does not update that project. Apps Script and FCM may also delay execution or
 delivery. FCM requires internet access; an offline device may receive a push
 after it reconnects. Android's system force-stop prevents delivery until the
 app is opened again.

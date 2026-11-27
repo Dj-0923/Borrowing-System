@@ -105,6 +105,89 @@ test("deadline scan sends tomorrow, due-today, and overdue reminders once per Ma
   assert.equal(properties.get("LENDY_REMINDER_DATE"), "2026-11-16");
 });
 
+test("daily reminders cover hour-based loans and group items into one notification", () => {
+  const { context, properties } = createContext();
+  properties.set("LENDY_REMINDER_DATE", "2026-11-15");
+  const notifications = [];
+  context.lendyRunQuery_ = () => [
+    firestoreDocument("group-1", {
+      borrowerUid: "borrower-1",
+      requestGroupId: "request-1",
+      name: "Epson Projector",
+      durationType: "hours",
+      end: "2026-11-16",
+    }),
+    firestoreDocument("group-2", {
+      borrowerUid: "borrower-1",
+      requestGroupId: "request-1",
+      name: "HDMI Cable",
+      durationType: "hours",
+      end: "2026-11-16",
+    }),
+    firestoreDocument("group-3", {
+      borrowerUid: "borrower-1",
+      requestGroupId: "request-1",
+      name: "Tripod",
+      durationType: "hours",
+      end: "2026-11-16",
+    }),
+    firestoreDocument("group-4", {
+      borrowerUid: "borrower-1",
+      requestGroupId: "request-1",
+      name: "Microphone",
+      durationType: "hours",
+      end: "2026-11-16",
+    }),
+    firestoreDocument("day-loan", {
+      borrowerUid: "borrower-3",
+      name: "Tablet",
+      durationType: "days",
+      end: "2026-11-16",
+    }),
+    firestoreDocument("hour-overdue", {
+      borrowerUid: "borrower-2",
+      name: "Camera",
+      durationType: "hours",
+      end: "2026-11-15",
+      endAt: "2026-11-15T10:00:00",
+    }),
+  ];
+  context.lendyNotifyBorrower_ = (_projectId, notification) => {
+    notifications.push(notification);
+  };
+
+  context.lendyProcessDueReminders_("test", properties);
+  context.lendyProcessDueReminders_("test", properties);
+
+  assert.deepEqual(
+    notifications.map(({ type, notificationId, message }) => ({
+      type,
+      notificationId,
+      message,
+    })),
+    [
+      {
+        type: "due_today",
+        notificationId: "group_request-1_due_today_2026-11-16",
+        message:
+          "Epson Projector and 3 more items are due today. Please return them on time.",
+      },
+      {
+        type: "due_today",
+        notificationId: "day-loan_due_today_2026-11-16",
+        message: "Tablet is due today. Please return it on time.",
+      },
+      {
+        type: "overdue",
+        notificationId: "hour-overdue_overdue_2026-11-16",
+        message:
+          "Camera was due 2026-11-15 and is overdue. Please return it as soon as possible.",
+      },
+    ],
+  );
+  assert.equal(properties.get("LENDY_REMINDER_DATE"), "2026-11-16");
+});
+
 test("loan scan distinguishes request decisions from rejected return reports", () => {
   const { context, properties } = createContext();
   properties.set("LENDY_LOAN_CURSOR_MS", "100");

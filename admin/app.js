@@ -531,6 +531,7 @@
     filter: { inventory: 'all', inventoryCategory: 'all', history: 'all', usersRole: 'all', usersCourse: 'all' }, q: { inventory: '', history: '', users: '', messages: '' },
     chatUserId: null, chatMessages: [], chatError: null, chatDraft: ''
   };
+  var activeEquipmentCrop = null;
   var pendingConfirm = null;
 
   /* ---------- shared template pieces ---------- */
@@ -764,13 +765,38 @@
             (equipment ? ' · ' + esc(equipmentTag(equipment)) : '') + '</span>' +
             pill(status) + '<span>' + esc(note) + '</span></div>';
         }).join('');
+        var groupTitle = esc(firstLoan.name) + (group.length > 1
+          ? ' and ' + esc(plural(group.length - 1, 'more item'))
+          : '');
+        var firstStatus = firstEquipment ? itemStatus(firstEquipment) : 'maintenance';
+        var firstActiveLoan = firstEquipment ? activeLoanFor(firstEquipment.id) : null;
+        var singleAvailability = firstStatus === 'available'
+          ? 'Ready to lend'
+          : firstStatus === 'borrowed' && firstActiveLoan
+            ? 'On loan until ' + fmt(firstActiveLoan.end)
+            : firstEquipment ? 'In maintenance' : 'No longer in inventory';
+        var availabilitySummary = group.length === 1
+          ? '<span class="text-xs font-semibold ' +
+            (firstStatus === 'available' ? '' : 'text-muted') + '"' +
+            (firstStatus === 'available' ? ' style="color:var(--ok-fg)"' : '') +
+            '>' + esc(singleAvailability) + '</span>'
+          : allAvailable
+            ? '<span class="text-xs font-semibold" style="color:var(--ok-fg)">Ready to lend</span>'
+            : '<span class="text-xs font-semibold text-muted">Check item availability</span>';
+        var itemsDetails = group.length > 1
+          ? '<details class="approval-items-details mt-2">' +
+            '<summary class="btn btn-ghost btn-sm">See items (' + group.length + ')</summary>' +
+            '<div class="mt-2 grid gap-1">' + itemRows + '</div></details>'
+          : '';
+        var singleItemTag = group.length === 1 && firstEquipment
+          ? '<span class="text-xs text-muted">· ' + esc(equipmentTag(firstEquipment)) + '</span>'
+          : '';
         return '<div class="rounded-2xl bg-card border border-line shadow-soft p-4 sm:p-5 flex flex-wrap items-center gap-4">' +
           mediaTile(firstEquipment, 'w-12 h-12') +
-          '<div class="min-w-[180px] flex-1"><p class="font-semibold">' +
-          (group.length > 1 ? esc(plural(group.length, 'item')) + ' requested' : esc(firstLoan.name)) +
-          '</p>' +
+          '<div class="min-w-[220px] flex-1"><div class="flex flex-wrap items-center gap-2">' +
+          '<p class="font-semibold">' + groupTitle + '</p>' + singleItemTag + availabilitySummary + '</div>' +
           '<p class="text-sm text-muted mt-0.5">' + esc(borrowerName(firstLoan)) + ' · <span class="tnum">' + loanPeriod(firstLoan) + '</span></p>' +
-          '<div class="mt-2 grid gap-1">' + itemRows + '</div></div>' +
+          itemsDetails + '</div>' +
           '<div class="flex gap-2 ml-auto">' +
           '<button class="btn btn-danger" data-action="reject" data-id="' + firstLoan.id + '"' +
           (!allPending ? ' disabled title="This grouped request is no longer fully pending"' : '') + '>' +
@@ -1985,10 +2011,15 @@
     var imagePreview = item && item.image
       ? '<img src="' + esc(item.image) + '" class="w-full h-full object-cover" alt="">'
       : icon('box', 'w-6 h-6');
+    var cropPlaceholder = item && item.image
+      ? '<img src="' + esc(item.image) + '" class="equipment-crop-placeholder-image" alt="Current equipment photo">'
+      : '<div class="equipment-crop-empty">' + icon('box', 'w-10 h-10') +
+        '<p>Select a photo to preview and crop it.</p></div>';
     var imageRequired = !editing || !item.image;
     return modalHead(editing ? 'Edit equipment details' : 'Add equipment',
       editing ? 'Update the equipment information. Its current status will not change.' : 'New items start as available.') +
-      '<form data-form="' + (editing ? 'edit-equipment' : 'add') + '"' + (editing ? ' data-id="' + esc(item.id) + '"' : '') + ' novalidate class="mt-5 grid gap-4">' +
+      '<form data-form="' + (editing ? 'edit-equipment' : 'add') + '"' + (editing ? ' data-id="' + esc(item.id) + '"' : '') + ' novalidate class="equipment-form-layout mt-5 grid gap-5">' +
+      '<div class="equipment-form-fields">' +
       '<div><label class="lbl" for="f-name">Name</label><input id="f-name" name="name" class="field" placeholder="e.g. Camera A" maxlength="60" autocomplete="off" value="' + esc(editing ? item.name : '') + '"></div>' +
       '<div><label class="lbl" for="f-brand">Brand <span class="font-normal">(optional)</span></label><input id="f-brand" name="brand" class="field" placeholder="Enter brand if known" maxlength="60" autocomplete="off" value="' + esc(editing ? item.brand : '') + '"></div>' +
       '<div><label class="lbl" for="f-details">Details <span class="font-normal">(optional)</span></label><textarea id="f-details" name="details" class="field" rows="3" maxlength="500" placeholder="Describe the item">' + esc(editing ? item.details : '') + '</textarea></div>' +
@@ -2002,10 +2033,27 @@
       '<div><label class="lbl" for="f-image">Photo' + (imageRequired ? ' <span class="text-red-600" aria-hidden="true">*</span><span class="sr-only"> (required)</span>' : '') + '</label>' +
       '<div class="flex items-center gap-3">' +
       '<span id="image-preview" class="shrink-0 w-14 h-14 rounded-xl bg-tint text-brand flex items-center justify-center overflow-hidden">' + imagePreview + '</span>' +
-      '<input id="f-image" name="image" type="file" accept="image/*" class="field" style="padding:.5rem .7rem"' + (imageRequired ? ' required' : '') + '></div>' +
-      (editing ? '' : '<p class="text-[11px] text-muted mt-1.5">JPG or PNG. It\u2019s resized automatically before saving.</p>') + '</div>' +
-      '<p id="form-error" class="text-sm t-bad min-h-[1.25rem]" role="alert"></p>' +
-      '<div class="flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button type="submit" class="btn btn-primary">' + (editing ? 'Save details' : 'Add equipment') + '</button></div></form>';
+      '<input id="f-image" name="image" type="file" accept="image/*" class="field" style="padding:.5rem .7rem"' + (imageRequired ? ' required' : '') + '></div></div>' +
+      '<p id="form-error" class="equipment-form-error text-sm t-bad min-h-[1.25rem]" role="alert"></p>' +
+      '<div class="equipment-form-actions flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-action="close-modal">Cancel</button><button type="submit" class="btn btn-primary">' + (editing ? 'Save details' : 'Add equipment') + '</button></div></div>' +
+      '<div class="equipment-crop-column">' +
+      '<div id="image-crop-placeholder" class="equipment-crop-placeholder">' + cropPlaceholder + '</div>' +
+      '<input id="f-cropped-image" name="croppedImage" type="hidden">' +
+      '<input id="f-image-mode" name="imageMode" type="hidden">' +
+      '<div id="image-crop-panel" class="equipment-crop-panel rounded-xl border border-line bg-tint p-4" hidden>' +
+      '<p class="text-sm font-semibold mb-3">Drag the photo to position it, then adjust the zoom.</p>' +
+      '<canvas id="image-crop-canvas" width="512" height="512" aria-label="Image crop preview" style="display:block;width:100%;height:auto;touch-action:none;cursor:move"></canvas>' +
+      '<label class="lbl mt-3" for="f-image-zoom">Zoom</label>' +
+      '<input id="f-image-zoom" type="range" min="1" max="3" step="0.01" value="1" class="w-full" disabled>' +
+      '<div class="mt-3 flex flex-wrap justify-end gap-2">' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-action="use-original-image" disabled>Use original</button>' +
+      '<button type="button" class="btn btn-primary btn-sm" data-action="apply-image-crop" disabled>Apply crop</button></div></div>' +
+      '<div class="mt-3 flex flex-wrap items-center justify-between gap-2">' +
+      '<p id="image-crop-status" class="text-xs text-muted">' +
+      (editing && item.image ? 'Select Adjust crop to edit this photo.' : 'JPG or PNG. You can crop before saving.') +
+      '</p>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-action="adjust-image-crop"' +
+      (editing && item.image ? '' : ' hidden') + '>Adjust crop</button></div></div></form>';
   }
   function confirmBody(m) {
     return modalHead(esc(m.title)) + '<p class="text-sm text-muted mt-3">' + esc(m.body) + '</p>' +
@@ -2128,13 +2176,14 @@
   function renderModal() {
     var m = state.modal, root = $('#modal-root');
     if (!m) { root.innerHTML = ''; return; }
+    var equipmentModal = m.type === 'add' || m.type === 'edit-equipment';
     var inner = m.type === 'request' ? requestForm(m) : m.type === 'add' ? addForm() : m.type === 'edit-equipment' ?
       (eqById(m.id) ? addForm(eqById(m.id)) : modalHead('Equipment unavailable') + '<p class="text-sm text-muted mt-3">This item may have been removed from the inventory.</p>') : m.type === 'qr' ? qrBody(m) :
       m.type === 'approve-account' ? approveAccountForm(m) :
       m.type === 'edit-profile' ? editProfileForm() : m.type === 'change-password' ? changePasswordBody() :
       m.type === 'account' ? accountBody(m) : m.type === 'user-detail' ? userDetailBody(m) : confirmBody(m);
     root.innerHTML = '<div data-action="backdrop" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4" style="padding-bottom:calc(1rem + env(safe-area-inset-bottom,0px))">' +
-      '<div role="dialog" aria-modal="true" class="pop w-full ' + (m.type === 'edit-profile' ? 'max-w-sm' : 'max-w-md') + ' max-h-full overflow-y-auto rounded-2xl bg-card border border-line p-6 shadow-2xl">' + inner + '</div></div>';
+      '<div role="dialog" aria-modal="true" class="pop w-full ' + (equipmentModal ? 'max-w-5xl' : m.type === 'edit-profile' ? 'max-w-sm' : 'max-w-md') + ' max-h-full overflow-y-auto rounded-2xl bg-card border border-line p-6 shadow-2xl">' + inner + '</div></div>';
     var requestStart = root.querySelector('#f-start');
     var requestEnd = root.querySelector('#f-end');
     if (m.type === 'request' && requestStart && requestEnd) {
@@ -2152,8 +2201,17 @@
     var first = root.querySelector('input:not([type=checkbox]):not([type=file]):not([type=hidden]):not([readonly]), select');
     if (first) first.focus(); else { var b = root.querySelector('.btn-primary, .btn-danger'); if (b) b.focus(); }
   }
-  function openModal(m) { state.modal = m; renderModal(); }
-  function closeModal() { state.modal = null; pendingConfirm = null; renderModal(); }
+  function openModal(m) {
+    activeEquipmentCrop = null;
+    state.modal = m;
+    renderModal();
+  }
+  function closeModal() {
+    activeEquipmentCrop = null;
+    state.modal = null;
+    pendingConfirm = null;
+    renderModal();
+  }
   function formError(msg) { var el = $('#form-error'); if (el) el.textContent = msg; }
 
   function submitRequest(form) {
@@ -2179,13 +2237,10 @@
   /* Shrinks a picked photo to a small JPEG data URI so it fits comfortably
      inside a Firestore document (1 MiB limit per doc). Good enough for a
      thumbnail-sized equipment photo; not meant for full-resolution storage. */
-  function compressImage(file, maxDim, quality) {
+  function compressImage(source, maxDim, quality) {
     return new Promise(function (resolve, reject) {
-      if (!file) { resolve(null); return; }
-      if (!/^image\//.test(file.type)) { reject(new Error('That file is not an image.')); return; }
-      var reader = new FileReader();
-      reader.onerror = function () { reject(new Error('Could not read that photo.')); };
-      reader.onload = function () {
+      if (!source) { resolve(null); return; }
+      function compressDataUrl(dataUrl) {
         var img = new Image();
         img.onerror = function () { reject(new Error('Could not read that photo.')); };
         img.onload = function () {
@@ -2193,13 +2248,297 @@
           var w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
           var canvas = document.createElement('canvas');
           canvas.width = w; canvas.height = h;
-          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          var context = canvas.getContext('2d');
+          if (!context) { reject(new Error('Could not process that photo.')); return; }
+          context.drawImage(img, 0, 0, w, h);
           resolve(canvas.toDataURL('image/jpeg', quality || 0.72));
         };
-        img.src = reader.result;
-      };
-      reader.readAsDataURL(file);
+        img.src = dataUrl;
+      }
+
+      if (typeof source === 'string') {
+        compressDataUrl(source);
+        return;
+      }
+      if (!/^image\//.test(source.type)) {
+        reject(new Error('That file is not an image.'));
+        return;
+      }
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('Could not read that photo.')); };
+      reader.onload = function () { compressDataUrl(reader.result); };
+      reader.readAsDataURL(source);
     });
+  }
+
+  function cropImageMetrics(crop) {
+    var scale = Math.max(
+      crop.canvas.width / crop.image.width,
+      crop.canvas.height / crop.image.height
+    ) * crop.zoom;
+    var width = crop.image.width * scale;
+    var height = crop.image.height * scale;
+    var centeredLeft = (crop.canvas.width - width) / 2;
+    var centeredTop = (crop.canvas.height - height) / 2;
+    var left = Math.max(crop.canvas.width - width, Math.min(0, centeredLeft + crop.offsetX));
+    var top = Math.max(crop.canvas.height - height, Math.min(0, centeredTop + crop.offsetY));
+    crop.offsetX = left - centeredLeft;
+    crop.offsetY = top - centeredTop;
+    crop.scale = scale;
+    crop.left = left;
+    crop.top = top;
+    crop.drawWidth = width;
+    crop.drawHeight = height;
+    return crop;
+  }
+
+  function drawEquipmentCrop(crop) {
+    var context = crop.canvas.getContext('2d');
+    if (!context) {
+      formError('Could not prepare the crop preview.');
+      return;
+    }
+    cropImageMetrics(crop);
+    context.clearRect(0, 0, crop.canvas.width, crop.canvas.height);
+    context.drawImage(
+      crop.image,
+      crop.left,
+      crop.top,
+      crop.drawWidth,
+      crop.drawHeight
+    );
+  }
+
+  function invalidateEquipmentCrop(crop) {
+    crop.form.elements.imageMode.value = '';
+    crop.form.elements.croppedImage.value = '';
+    var status = crop.form.querySelector('#image-crop-status');
+    if (status) status.textContent = 'Apply the crop or use the original image.';
+  }
+
+  function resetEquipmentCropUI(form) {
+    activeEquipmentCrop = null;
+    form.elements.imageMode.value = '';
+    form.elements.croppedImage.value = '';
+    var panel = form.querySelector('#image-crop-panel');
+    var placeholder = form.querySelector('#image-crop-placeholder');
+    var zoomInput = form.querySelector('#f-image-zoom');
+    var applyCropButton = form.querySelector('[data-action="apply-image-crop"]');
+    var originalImageButton = form.querySelector('[data-action="use-original-image"]');
+    var adjustCropButton = form.querySelector('[data-action="adjust-image-crop"]');
+    if (panel) panel.hidden = true;
+    if (zoomInput) zoomInput.disabled = true;
+    if (applyCropButton) applyCropButton.disabled = true;
+    if (originalImageButton) originalImageButton.disabled = true;
+    if (adjustCropButton) adjustCropButton.hidden = true;
+  }
+
+  function createEquipmentCropSession(form) {
+    return {
+      form: form,
+      image: new Image(),
+      originalData: '',
+      canvas: form.querySelector('#image-crop-canvas'),
+      zoom: 1,
+      offsetX: 0,
+      offsetY: 0,
+      dragging: null,
+    };
+  }
+
+  function loadEquipmentCropSource(crop, dataUrl) {
+    if (activeEquipmentCrop !== crop) return;
+    crop.originalData = dataUrl;
+    var form = crop.form;
+    var preview = form.querySelector('#image-preview');
+    if (preview) {
+      preview.innerHTML = '<img src="' + esc(crop.originalData) +
+        '" class="w-full h-full object-cover" alt="">';
+    }
+    crop.image.onerror = function () {
+      if (activeEquipmentCrop === crop) formError('Could not read that photo.');
+    };
+    crop.image.onload = function () {
+      if (activeEquipmentCrop !== crop) return;
+      var panel = form.querySelector('#image-crop-panel');
+      var zoom = form.querySelector('#f-image-zoom');
+      var applyButton = form.querySelector('[data-action="apply-image-crop"]');
+      var originalButton = form.querySelector('[data-action="use-original-image"]');
+      if (!crop.canvas || !panel || !zoom || !applyButton || !originalButton) {
+        formError('Could not open the crop editor.');
+        return;
+      }
+      crop.canvas.onpointerdown = function (event) {
+        crop.dragging = { x: event.clientX, y: event.clientY };
+        if (crop.canvas.setPointerCapture) crop.canvas.setPointerCapture(event.pointerId);
+      };
+      crop.canvas.onpointermove = function (event) {
+        if (!crop.dragging || activeEquipmentCrop !== crop) return;
+        var bounds = crop.canvas.getBoundingClientRect();
+        var scaleX = crop.canvas.width / bounds.width;
+        var scaleY = crop.canvas.height / bounds.height;
+        crop.offsetX += (event.clientX - crop.dragging.x) * scaleX;
+        crop.offsetY += (event.clientY - crop.dragging.y) * scaleY;
+        crop.dragging = { x: event.clientX, y: event.clientY };
+        invalidateEquipmentCrop(crop);
+        drawEquipmentCrop(crop);
+      };
+      crop.canvas.onpointerup = function () { crop.dragging = null; };
+      crop.canvas.onpointercancel = function () { crop.dragging = null; };
+      crop.zoom = 1;
+      crop.offsetX = 0;
+      crop.offsetY = 0;
+      zoom.value = '1';
+      zoom.disabled = false;
+      applyButton.disabled = false;
+      originalButton.disabled = false;
+      panel.hidden = false;
+      var imagePlaceholder = form.querySelector('#image-crop-placeholder');
+      if (imagePlaceholder) imagePlaceholder.hidden = true;
+      drawEquipmentCrop(crop);
+      formError('');
+    };
+    crop.image.src = crop.originalData;
+  }
+
+  function startEquipmentCrop(file, form) {
+    if (!file) return;
+    resetEquipmentCropUI(form);
+    if (!/^image\//.test(file.type)) {
+      formError('Choose a valid image file.');
+      form.elements.image.value = '';
+      var existingItem = form.dataset.id ? eqById(form.dataset.id) : null;
+      var preview = form.querySelector('#image-preview');
+      var status = form.querySelector('#image-crop-status');
+      var adjustCropButton = form.querySelector('[data-action="adjust-image-crop"]');
+      if (preview) {
+        preview.innerHTML = existingItem && existingItem.image
+          ? '<img src="' + esc(existingItem.image) + '" class="w-full h-full object-cover" alt="">'
+          : icon('box', 'w-6 h-6');
+      }
+      if (placeholder) {
+        placeholder.innerHTML = existingItem && existingItem.image
+          ? '<img src="' + esc(existingItem.image) + '" class="equipment-crop-placeholder-image" alt="Current equipment photo">'
+          : '<div class="equipment-crop-empty">' + icon('box', 'w-10 h-10') +
+            '<p>Select a photo to preview and crop it.</p></div>';
+        placeholder.hidden = false;
+      }
+      if (status && existingItem && existingItem.image) {
+        status.textContent = 'Select Adjust crop to edit this photo.';
+      }
+      if (adjustCropButton) adjustCropButton.hidden = !(existingItem && existingItem.image);
+      return;
+    }
+
+    var crop = createEquipmentCropSession(form);
+    activeEquipmentCrop = crop;
+    var status = form.querySelector('#image-crop-status');
+    if (status) status.textContent = 'Preparing crop preview...';
+
+    var reader = new FileReader();
+    reader.onerror = function () {
+      if (activeEquipmentCrop === crop) formError('Could not read that photo.');
+    };
+    reader.onload = function () {
+      if (activeEquipmentCrop !== crop || typeof reader.result !== 'string') return;
+      loadEquipmentCropSource(crop, reader.result);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function startExistingEquipmentCrop(form) {
+    var item = eqById(form.dataset.id);
+    if (!item || !item.image) {
+      formError('Choose a photo before adjusting the crop.');
+      return;
+    }
+    resetEquipmentCropUI(form);
+    var crop = createEquipmentCropSession(form);
+    activeEquipmentCrop = crop;
+    var status = form.querySelector('#image-crop-status');
+    if (status) status.textContent = 'Preparing crop preview...';
+    loadEquipmentCropSource(crop, item.image);
+  }
+
+  function setEquipmentCropZoom(value) {
+    var crop = activeEquipmentCrop;
+    if (!crop || !crop.image.complete || !crop.canvas) return;
+    var oldWidth = crop.drawWidth || crop.image.width;
+    var oldHeight = crop.drawHeight || crop.image.height;
+    var focalX = (crop.canvas.width / 2 - crop.left) / oldWidth;
+    var focalY = (crop.canvas.height / 2 - crop.top) / oldHeight;
+    crop.zoom = Math.max(1, Math.min(3, value));
+    var scale = Math.max(
+      crop.canvas.width / crop.image.width,
+      crop.canvas.height / crop.image.height
+    ) * crop.zoom;
+    var width = crop.image.width * scale;
+    var height = crop.image.height * scale;
+    crop.offsetX = crop.canvas.width / 2 - focalX * width -
+      (crop.canvas.width - width) / 2;
+    crop.offsetY = crop.canvas.height / 2 - focalY * height -
+      (crop.canvas.height - height) / 2;
+    invalidateEquipmentCrop(crop);
+    drawEquipmentCrop(crop);
+  }
+
+  function applyEquipmentCrop() {
+    var crop = activeEquipmentCrop;
+    if (!crop || !crop.image.complete) return;
+    cropImageMetrics(crop);
+    var output = document.createElement('canvas');
+    output.width = 512;
+    output.height = 512;
+    var context = output.getContext('2d');
+    if (!context) {
+      formError('Could not create the cropped photo.');
+      return;
+    }
+    var sourceX = -crop.left / crop.scale;
+    var sourceY = -crop.top / crop.scale;
+    var sourceSize = crop.canvas.width / crop.scale;
+    context.drawImage(
+      crop.image,
+      sourceX,
+      sourceY,
+      sourceSize,
+      sourceSize,
+      0,
+      0,
+      output.width,
+      output.height
+    );
+    crop.form.elements.croppedImage.value = output.toDataURL('image/jpeg', 0.9);
+    crop.form.elements.imageMode.value = 'cropped';
+    var preview = crop.form.querySelector('#image-preview');
+    if (preview) {
+      preview.innerHTML = '<img src="' + esc(crop.form.elements.croppedImage.value) +
+        '" class="w-full h-full object-cover" alt="">';
+    }
+    crop.form.querySelector('#image-crop-status').textContent = 'Crop applied.';
+    formError('');
+  }
+
+  function useOriginalEquipmentImage() {
+    var crop = activeEquipmentCrop;
+    if (!crop) return;
+    crop.form.elements.croppedImage.value = '';
+    crop.form.elements.imageMode.value = 'original';
+    var preview = crop.form.querySelector('#image-preview');
+    if (preview) {
+      preview.innerHTML = '<img src="' + esc(crop.originalData) +
+        '" class="w-full h-full object-cover" alt="">';
+    }
+    var placeholder = crop.form.querySelector('#image-crop-placeholder');
+    if (placeholder) {
+      placeholder.innerHTML = '<img src="' + esc(crop.originalData) +
+        '" class="equipment-crop-placeholder-image" alt="Selected equipment photo">';
+      placeholder.hidden = false;
+    }
+    crop.form.querySelector('#image-crop-panel').hidden = true;
+    crop.form.querySelector('#image-crop-status').textContent = 'Using the original image.';
+    crop.form.querySelector('[data-action="adjust-image-crop"]').hidden = false;
+    formError('');
   }
 
   function submitAdd(form) {
@@ -2216,9 +2555,13 @@
     var file = form.elements.image && form.elements.image.files[0];
     if (!file) return formError('Add an item photo before saving.');
     if (!/^image\//.test(file.type)) return formError('Choose a valid image file.');
+    var imageMode = form.elements.imageMode.value;
+    if (!imageMode) return formError('Apply the crop or choose to use the original image.');
     var submitBtn = form.querySelector('button[type=submit]');
     if (submitBtn) submitBtn.disabled = true;
-    compressImage(file)
+    compressImage(
+      imageMode === 'cropped' ? form.elements.croppedImage.value : file
+    )
       .then(function (imageData) {
         var ref = equipmentCol.doc();
         var tag = String(f.get('tag') || '').trim().toUpperCase() || equipmentTag({ id: ref.id, category: cat });
@@ -2253,9 +2596,17 @@
     if (!cat) return formError('Enter a name for the category.');
     var file = form.elements.image && form.elements.image.files[0];
     if (!file && !item.image) return formError('Add an item photo before saving.');
+    var imageMode = form.elements.imageMode.value;
+    var cropSessionActive = activeEquipmentCrop && activeEquipmentCrop.form === form;
+    if ((file || cropSessionActive) && !imageMode) {
+      return formError('Apply the crop or choose to use the original image.');
+    }
     var submitBtn = form.querySelector('button[type=submit]');
     if (submitBtn) submitBtn.disabled = true;
-    compressImage(file)
+    var imageSource = imageMode === 'cropped'
+      ? form.elements.croppedImage.value
+      : file;
+    compressImage(imageSource)
       .then(function (imageData) {
         var tag = String(f.get('tag') || '').trim().toUpperCase() || equipmentTag({ id: item.id, category: cat });
         return equipmentCol.doc(item.id).update({
@@ -2335,6 +2686,18 @@
           render();
         }
         break;
+      case 'apply-image-crop': applyEquipmentCrop(); break;
+      case 'use-original-image': useOriginalEquipmentImage(); break;
+      case 'adjust-image-crop':
+        var cropForm = el.closest('form');
+        if (activeEquipmentCrop && activeEquipmentCrop.form === cropForm) {
+          cropForm.querySelector('#image-crop-panel').hidden = false;
+          cropForm.querySelector('#image-crop-placeholder').hidden = true;
+          cropForm.querySelector('[data-action="adjust-image-crop"]').hidden = true;
+        } else if (cropForm) {
+          startExistingEquipmentCrop(cropForm);
+        }
+        break;
       case 'inv-filter': state.filter.inventory = el.dataset.value; render(); break;
       case 'hist-filter': state.filter.history = el.dataset.value; render(); break;
       case 'approve': approve(id); break;
@@ -2412,6 +2775,10 @@
       resizeChatInput(ev.target);
       return;
     }
+    if (ev.target && ev.target.id === 'f-image-zoom') {
+      setEquipmentCropZoom(Number(ev.target.value));
+      return;
+    }
     var k = ev.target && ev.target.dataset && ev.target.dataset.search;
     if (k) { state.q[k] = ev.target.value; render(); }
   });
@@ -2435,12 +2802,8 @@
       if (end.value < ev.target.value) end.value = ev.target.value;
     }
     if (ev.target && ev.target.id === 'f-image') {
-      var prev = $('#image-preview'), file = ev.target.files[0];
-      if (!prev) return;
-      if (!file || !/^image\//.test(file.type)) { prev.innerHTML = icon('box', 'w-6 h-6'); return; }
-      var reader = new FileReader();
-      reader.onload = function () { prev.innerHTML = '<img src="' + reader.result + '" class="w-full h-full object-cover" alt="">'; };
-      reader.readAsDataURL(file);
+      startEquipmentCrop(ev.target.files[0], ev.target.form);
+      return;
     }
     if (ev.target && ev.target.id === 'p-photo') {
       var pprev = $('#profile-photo-preview'), pfile = ev.target.files[0];

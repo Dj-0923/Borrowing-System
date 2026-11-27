@@ -166,6 +166,7 @@ function lendyProcessDueReminders_(projectId, properties) {
   if (properties.getProperty("LENDY_REMINDER_DATE") === today) return;
 
   var tomorrow = lendyNextDate_(today);
+  var reminders = {};
   var loans = lendyRunQuery_(projectId, {
     from: [{ collectionId: "loans" }],
     where: {
@@ -182,41 +183,89 @@ function lendyProcessDueReminders_(projectId, properties) {
     var loanId = lendyDocumentId_(document);
     if (!loanId || !loan.borrowerUid || typeof loan.end !== "string") return;
 
+    var reminderKind;
+    var notificationIdSuffix;
+    var title;
+    var type;
     if (loan.end === tomorrow) {
-      lendyNotifyBorrower_(projectId, {
-        borrowerUid: loan.borrowerUid,
-        notificationId: loanId + "_due_tomorrow_" + tomorrow,
-        title: "Return due tomorrow",
-        message: lendyItemTitle_(loan) + " is due tomorrow. Please return it on time.",
-        type: "due_reminder",
-        loanId: loanId,
-        preferenceKey: "returnRemindersEnabled",
-      });
+      reminderKind = "due_tomorrow";
+      notificationIdSuffix = "_due_tomorrow_" + tomorrow;
+      title = "Return due tomorrow";
+      type = "due_reminder";
     } else if (loan.end === today) {
-      lendyNotifyBorrower_(projectId, {
-        borrowerUid: loan.borrowerUid,
-        notificationId: loanId + "_due_today_" + today,
-        title: "Return due today",
-        message: lendyItemTitle_(loan) + " is due today. Please return it on time.",
-        type: "due_today",
-        loanId: loanId,
-        preferenceKey: "returnRemindersEnabled",
-      });
+      reminderKind = "due_today";
+      notificationIdSuffix = "_due_today_" + today;
+      title = "Return due today";
+      type = "due_today";
     } else if (loan.end < today) {
-      lendyNotifyBorrower_(projectId, {
-        borrowerUid: loan.borrowerUid,
-        notificationId: loanId + "_overdue_" + today,
-        title: "Item overdue",
-        message: lendyItemTitle_(loan) + " was due " + loan.end +
-          " and is overdue. Please return it as soon as possible.",
-        type: "overdue",
-        loanId: loanId,
-        preferenceKey: "returnRemindersEnabled",
-      });
+      reminderKind = "overdue";
+      notificationIdSuffix = "_overdue_" + today;
+      title = "Item overdue";
+      type = "overdue";
     }
+    if (!reminderKind) return;
+
+    var notificationBase = loan.requestGroupId
+      ? "group_" + loan.requestGroupId
+      : loanId;
+    var notificationId = notificationBase + notificationIdSuffix;
+    var reminderKey = loan.borrowerUid + "/" + notificationId;
+    if (!reminders[reminderKey]) {
+      reminders[reminderKey] = {
+        borrowerUid: loan.borrowerUid,
+        notificationId: notificationId,
+        title: title,
+        type: type,
+        loanId: loanId,
+        kind: reminderKind,
+        dueDate: loan.end,
+        items: [],
+      };
+    }
+    reminders[reminderKey].items.push(loan);
+  });
+
+  Object.keys(reminders).forEach(function (key) {
+    var reminder = reminders[key];
+    var itemCount = reminder.items.length;
+    var subject = lendyReminderSubject_(reminder.items);
+    var isPlural = itemCount > 1;
+    var pronoun = isPlural ? "them" : "it";
+    var message;
+
+    if (reminder.kind === "due_tomorrow") {
+      message = subject + (isPlural ? " are" : " is") +
+        " due tomorrow. Please return " + pronoun + " on time.";
+    } else if (reminder.kind === "due_today") {
+      message = subject + (isPlural ? " are" : " is") +
+        " due today. Please return " + pronoun + " on time.";
+    } else {
+      message = subject + (isPlural ? " were" : " was") + " due " +
+        reminder.dueDate + (isPlural ? " and are" : " and is") +
+        " overdue. Please return " + pronoun + " as soon as possible.";
+    }
+
+    lendyNotifyBorrower_(projectId, {
+      borrowerUid: reminder.borrowerUid,
+      notificationId: reminder.notificationId,
+      title: reminder.title,
+      message: message,
+      type: reminder.type,
+      loanId: reminder.loanId,
+      preferenceKey: "returnRemindersEnabled",
+    });
   });
 
   properties.setProperty("LENDY_REMINDER_DATE", today);
+}
+
+function lendyReminderSubject_(loans) {
+  var firstName = lendyItemTitle_(loans[0]);
+  if (loans.length === 1) return firstName;
+  if (loans.length === 2) {
+    return firstName + " and " + lendyItemTitle_(loans[1]);
+  }
+  return firstName + " and " + (loans.length - 1) + " more items";
 }
 
 function lendyNotifyBorrower_(projectId, notification) {
